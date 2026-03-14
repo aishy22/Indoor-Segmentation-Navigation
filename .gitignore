@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+*.egg-info/
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Dataset (too large for GitHub)
+data/
+*.zip
+*.tar.gz
+
+# Models (can be large, save separately)
+models/*.pth
+!models/best_model.pth  # Optional: keep the best model if small
+
+# Outputs
+outputs/
+*.png
+*.jpg
+*.npy
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
