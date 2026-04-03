@@ -6,7 +6,7 @@ from config import Config
 
 class ADEClassMapper:
     """
-    Maps ADE20K's 150 classes to your 4 navigation classes:
+    Maps ADE20K's 150 classes to 4 navigation classes:
     0: floor
     1: obstacle/wall
     2: door
@@ -47,7 +47,7 @@ class ADEClassMapper:
         return class_names
     
     def get_fallback_classes(self):
-        """Fallback mapping based on the data you showed"""
+        """Fallback mapping based on the data"""
         return {
             1: 'wall',
             2: 'building, edifice',
@@ -203,7 +203,7 @@ class ADEClassMapper:
     
     def create_mapping(self):
         """
-        Create mapping from ADE class IDs to your 4 classes
+        Create mapping from ADE class IDs to 4 classes
         Returns: dict {ade_class_id: your_class_id}
         """
         mapping = {}
