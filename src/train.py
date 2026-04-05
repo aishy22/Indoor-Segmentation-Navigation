@@ -1,223 +1,221 @@
-# src/train.py 
+# src/train.py - Final Working Version
+# Trains on full ADE20K dataset with pre-trained weights
+
 import os
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-import time
-import sys
+from tqdm import tqdm
+import pickle
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from torch.utils.data import Dataset, DataLoader
+import segmentation_models_pytorch as smp
 
-sys.path.insert(0, '/content/Indoor-Segmentation-Navigation')
-sys.path.insert(0, '/content/Indoor-Segmentation-Navigation/src')
+# ============================================
+# CONFIGURATION
+# ============================================
+class Config:
+    DATA_PATH = '/content/ADEChallengeData2016'
+    MODEL_SAVE_PATH = '/content/Indoor-Segmentation-Navigation/models'
+    OUTPUT_PATH = '/content/Indoor-Segmentation-Navigation/outputs'
+    BATCH_SIZE = 16
+    EPOCHS = 15
+    LEARNING_RATE = 1e-4
+    NUM_WORKERS = 2
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-from config import Config
-from model import IndoorSegmentationModel
-from data_prep import get_dataloaders
-
-class Trainer:
-    def __init__(self):
-        self.device = torch.device(Config.DEVICE)
-        print(f"Using device: {self.device}")
-        
-        # Create model with MORE dropout for regularization
-        self.model = IndoorSegmentationModel().to(self.device)
-        
-        # Add more regularization: Dropout in the model itself
-        # (We'll modify model.py separately)
-        
-        # Class weights to handle imbalance
-        class_weights = torch.tensor([0.8, 0.5, 1.5, 2.0]).to(self.device)
-        self.criterion = nn.CrossEntropyLoss(weight=class_weights)
-        
-        # L2 Regularization (weight_decay) - INCREASED
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(), 
-            lr=Config.LEARNING_RATE,
-            weight_decay=1e-3  # Increased from 1e-4 (stronger regularization)
-        )
-        
-        # Reduce LR more aggressively when validation loss plateaus
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=2, cooldown=1
-        )
-        
-        # Training history
-        self.train_losses = []
-        self.val_losses = []
-        self.best_val_loss = float('inf')
-        self.patience_counter = 0
-        self.early_stop_patience = 5  # Stop if no improvement for 5 epochs
-        
-        os.makedirs(Config.MODEL_SAVE_PATH, exist_ok=True)
-        os.makedirs(Config.OUTPUT_PATH, exist_ok=True)
+# ============================================
+# CLASS MAPPING
+# ============================================
+def create_class_mapping():
+    class_mapping = {}
+    for i in range(1, 151):
+        class_mapping[i] = 1  # Default: wall
     
-    def train_epoch(self, train_loader):
-        self.model.train()
-        total_loss = 0
+    # Floor (class 0)
+    floor_ids = [4, 12, 14, 29, 53, 95, 7, 30, 55]
+    for idx in floor_ids:
+        class_mapping[idx] = 0
+    
+    # Door (class 2)
+    door_ids = [15, 59]
+    for idx in door_ids:
+        class_mapping[idx] = 2
+    
+    # No-go (class 3)
+    nogo_ids = [54, 60, 97, 61, 17, 22, 27, 50, 69, 72, 105, 110, 114, 122]
+    for idx in nogo_ids:
+        class_mapping[idx] = 3
+    
+    return class_mapping
+
+# ============================================
+# DATASET CLASS
+# ============================================
+class ADE20KDataset(Dataset):
+    def __init__(self, split='train', transform=None):
+        self.split = split
+        self.transform = transform
+        self.class_mapping = create_class_mapping()
         
-        pbar = tqdm(train_loader, desc="Training")
+        base_path = Config.DATA_PATH
+        self.images_dir = f'{base_path}/images/{split}'
+        self.masks_dir = f'{base_path}/annotations/{split}'
+        
+        self.images = [f for f in os.listdir(self.images_dir) if f.endswith('.jpg')]
+        print(f"Loaded {len(self.images)} {split} images")
+    
+    def __len__(self):
+        return len(self.images)
+    
+    def apply_mapping(self, mask):
+        result = np.ones_like(mask, dtype=np.uint8)
+        for orig, new in self.class_mapping.items():
+            result[mask == orig] = new
+        return result
+    
+    def __getitem__(self, idx):
+        img_name = self.images[idx]
+        img_path = os.path.join(self.images_dir, img_name)
+        mask_path = os.path.join(self.masks_dir, img_name.replace('.jpg', '.png'))
+        
+        img = cv2.imread(img_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        mask = self.apply_mapping(mask)
+        
+        if self.transform:
+            transformed = self.transform(image=img, mask=mask)
+            img = transformed['image']
+            mask = transformed['mask']
+            mask = mask.long()
+        
+        return img, mask
+
+# ============================================
+# MAIN TRAINING
+# ============================================
+def main():
+    # Create directories
+    os.makedirs(Config.MODEL_SAVE_PATH, exist_ok=True)
+    os.makedirs(Config.OUTPUT_PATH, exist_ok=True)
+    
+    # Transforms
+    train_transform = A.Compose([
+        A.Resize(256, 256),
+        A.HorizontalFlip(p=0.5),
+        A.RandomRotate90(p=0.3),
+        A.RandomBrightnessContrast(p=0.2),
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2()
+    ])
+    
+    val_transform = A.Compose([
+        A.Resize(256, 256),
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2()
+    ])
+    
+    # Datasets
+    print("📁 Creating datasets...")
+    train_dataset = ADE20KDataset('training', transform=train_transform)
+    val_dataset = ADE20KDataset('validation', transform=val_transform)
+    
+    train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True, num_workers=Config.NUM_WORKERS)
+    val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=Config.NUM_WORKERS)
+    
+    print(f"Train batches: {len(train_loader)}")
+    print(f"Val batches: {len(val_loader)}")
+    
+    # Model
+    print(f"\n🔧 Using device: {Config.DEVICE}")
+    model = smp.Unet(
+        encoder_name='resnet50',
+        encoder_weights='imagenet',
+        in_channels=3,
+        classes=4,
+        decoder_dropout=0.3,
+    ).to(Config.DEVICE)
+    
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    
+    # Training setup
+    class_weights = torch.tensor([0.8, 0.5, 1.5, 2.0]).to(Config.DEVICE)
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=Config.LEARNING_RATE, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+    
+    # Training loop
+    best_val_loss = float('inf')
+    train_losses, val_losses = [], []
+    
+    print("\n" + "="*60)
+    print("🚀 STARTING TRAINING")
+    print(f"   Training images: {len(train_dataset)}")
+    print(f"   Validation images: {len(val_dataset)}")
+    print(f"   Epochs: {Config.EPOCHS}")
+    print("="*60)
+    
+    for epoch in range(1, Config.EPOCHS + 1):
+        # Training
+        model.train()
+        train_loss = 0
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{Config.EPOCHS}")
         for images, masks in pbar:
-            images = images.to(self.device)
-            masks = masks.to(self.device).long()
+            images, masks = images.to(Config.DEVICE), masks.to(Config.DEVICE)
             
-            self.optimizer.zero_grad()
-            outputs = self.model(images)
-            loss = self.criterion(outputs, masks)
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, masks)
             loss.backward()
+            optimizer.step()
             
-            # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            
-            self.optimizer.step()
-            
-            total_loss += loss.item()
+            train_loss += loss.item()
             pbar.set_postfix({'loss': f'{loss.item():.4f}'})
         
-        return total_loss / len(train_loader)
-    
-    def validate(self, val_loader):
-        self.model.eval()
-        total_loss = 0
+        avg_train_loss = train_loss / len(train_loader)
+        train_losses.append(avg_train_loss)
         
+        # Validation
+        model.eval()
+        val_loss = 0
         with torch.no_grad():
-            pbar = tqdm(val_loader, desc="Validation")
-            for images, masks in pbar:
-                images = images.to(self.device)
-                masks = masks.to(self.device).long()
-                
-                outputs = self.model(images)
-                loss = self.criterion(outputs, masks)
-                total_loss += loss.item()
-                pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+            for images, masks in val_loader:
+                images, masks = images.to(Config.DEVICE), masks.to(Config.DEVICE)
+                outputs = model(images)
+                loss = criterion(outputs, masks)
+                val_loss += loss.item()
         
-        return total_loss / len(val_loader)
+        avg_val_loss = val_loss / len(val_loader)
+        val_losses.append(avg_val_loss)
+        scheduler.step(avg_val_loss)
+        
+        print(f"Epoch {epoch}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}")
+        
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth'))
+            print(f"  ✓ Saved best model (val_loss: {best_val_loss:.4f})")
     
-    def train(self):
-        print("=" * 60)
-        print("STARTING TRAINING WITH REGULARIZATION")
-        print("=" * 60)
-        print(f"Device: {self.device}")
-        print(f"Batch size: {Config.BATCH_SIZE}")
-        print(f"Epochs: {Config.EPOCHS}")
-        print(f"Learning rate: {Config.LEARNING_RATE}")
-        print(f"Weight decay: 1e-3 (L2 regularization)")
-        print(f"Early stopping patience: {self.early_stop_patience}")
-        print("=" * 60)
-        
-        # Get dataloaders
-        print("\n📁 Loading datasets...")
-        train_loader, val_loader = get_dataloaders(
-            batch_size=Config.BATCH_SIZE,
-            num_workers=Config.NUM_WORKERS,
-            max_train_samples=None,
-            max_val_samples=None
-        )
-        
-        print(f"\n📊 Training batches: {len(train_loader)}")
-        print(f"   Validation batches: {len(val_loader)}")
-        
-        start_time = time.time()
-        
-        for epoch in range(1, Config.EPOCHS + 1):
-            print(f"\n{'='*50}")
-            print(f"Epoch {epoch}/{Config.EPOCHS}")
-            print(f"{'='*50}")
-            
-            # Train
-            train_loss = self.train_epoch(train_loader)
-            self.train_losses.append(train_loss)
-            
-            # Validate
-            val_loss = self.validate(val_loader)
-            self.val_losses.append(val_loss)
-            
-            # Update scheduler
-            old_lr = self.optimizer.param_groups[0]['lr']
-            self.scheduler.step(val_loss)
-            new_lr = self.optimizer.param_groups[0]['lr']
-            
-            # Print results
-            print(f"\n📊 Results:")
-            print(f"   Train Loss: {train_loss:.4f}")
-            print(f"   Val Loss: {val_loss:.4f}")
-            print(f"   Learning Rate: {new_lr:.6f}")
-            
-            if new_lr < old_lr:
-                print(f"   📉 Learning rate reduced!")
-            
-            # Calculate gap
-            gap = val_loss - train_loss
-            print(f"   Gap (Val - Train): {gap:.4f}")
-            
-            # Save best model
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
-                model_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth')
-                torch.save(self.model.state_dict(), model_path)
-                print(f"   ✅ Saved best model! (val_loss: {self.best_val_loss:.4f})")
-                self.patience_counter = 0
-            else:
-                self.patience_counter += 1
-                print(f"   ⚠️ No improvement for {self.patience_counter} epochs")
-            
-            # Early stopping
-            if self.patience_counter >= self.early_stop_patience:
-                print(f"\n🛑 Early stopping triggered! No improvement for {self.early_stop_patience} epochs.")
-                break
-            
-            # Warning for overfitting
-            if gap > 0.2:
-                print(f"   ⚠️ Warning: Large gap ({gap:.4f}) - Possible overfitting!")
-        
-        # Training complete
-        total_time = time.time() - start_time
-        print("\n" + "=" * 60)
-        print("🎉 TRAINING COMPLETE!")
-        print("=" * 60)
-        print(f"Total time: {total_time/60:.2f} minutes")
-        print(f"Best validation loss: {self.best_val_loss:.4f}")
-        print(f"Model saved to: {os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth')}")
-        
-        self.plot_training_history()
-        return self.model
+    print(f"\n✅ Training complete! Best val loss: {best_val_loss:.4f}")
     
-    def plot_training_history(self):
-        plt.figure(figsize=(12, 5))
-        
-        plt.subplot(1, 2, 1)
-        plt.plot(self.train_losses, label='Train Loss', linewidth=2)
-        plt.plot(self.val_losses, label='Val Loss', linewidth=2)
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Training and Validation Loss')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        # Highlight overfitting region
-        if len(self.val_losses) > 3:
-            val_arr = np.array(self.val_losses)
-            if len(val_arr) > 3 and val_arr[-1] > val_arr[-2]:
-                plt.axvspan(len(self.val_losses)-2, len(self.val_losses), 
-                           alpha=0.3, color='red', label='Overfitting region')
-        
-        plt.subplot(1, 2, 2)
-        gaps = [self.val_losses[i] - self.train_losses[i] for i in range(len(self.train_losses))]
-        plt.plot(gaps, label='Val - Train Gap', color='orange', linewidth=2)
-        plt.axhline(y=0.1, color='r', linestyle='--', label='Warning threshold')
-        plt.xlabel('Epoch')
-        plt.ylabel('Gap')
-        plt.title('Overfitting Monitor')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        plot_path = os.path.join(Config.OUTPUT_PATH, 'training_history.png')
-        plt.savefig(plot_path, dpi=150)
-        print(f"\n📈 Training history saved to: {plot_path}")
-        plt.show()
+    # Plot results
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Val Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training History')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(Config.OUTPUT_PATH, 'training_history.png'))
+    plt.show()
 
+if __name__ == "__main__":
+    main()
 
 def main():
     trainer = Trainer()
