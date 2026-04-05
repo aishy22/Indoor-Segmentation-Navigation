@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 import segmentation_models_pytorch as smp
-from src.config import Config
+from config import Config
 
 class IndoorSegmentationModel(nn.Module):
     """
