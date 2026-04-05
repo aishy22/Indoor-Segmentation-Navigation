@@ -2,7 +2,22 @@
 import numpy as np
 import os
 import pickle
-from config import Config
+import sys
+
+# Add path setup for Colab
+sys.path.insert(0, '/content/Indoor-Segmentation-Navigation')
+sys.path.insert(0, '/content/Indoor-Segmentation-Navigation/src')
+
+# Import config - now works in Colab
+try:
+    from config import Config
+except ImportError:
+    # Fallback config for when running standalone
+    class Config:
+        BASE_PATH = '/content/Indoor-Segmentation-Navigation'
+        DATA_PATH = '/content/ADEChallengeData2016'
+        OUTPUT_PATH = '/content/outputs'
+        CLASS_NAMES = ['floor', 'obstacle/wall', 'door', 'no-go']
 
 class ADEClassMapper:
     """
@@ -20,7 +35,11 @@ class ADEClassMapper:
     def load_ade_classes(self):
         """Load ADE20K class names from objectInfo150.txt"""
         class_names = {}
-        object_info_path = os.path.join(Config.DATA_PATH, 'objectInfo150.txt')
+        # Use DATA_PATH from config, with fallback
+        data_path = getattr(Config, 'DATA_PATH', '/content/ADEChallengeData2016')
+        object_info_path = os.path.join(data_path, 'objectInfo150.txt')
+        
+        print(f"Looking for objectInfo150.txt at: {object_info_path}")
         
         try:
             with open(object_info_path, 'r') as f:
@@ -41,7 +60,34 @@ class ADEClassMapper:
                 
         except FileNotFoundError:
             print(f"✗ Could not find {object_info_path}")
-            # Fallback to hardcoded common classes based on your output
+            print("Looking for dataset in common locations...")
+            
+            # Try to find the dataset
+            possible_paths = [
+                '/content/ADEChallengeData2016/objectInfo150.txt',
+                '/content/ADEChallengeData2016/objectInfo150.txt',
+                '/content/data/ADEChallengeData2016/objectInfo150.txt',
+            ]
+            
+            for path in possible_paths:
+                if os.path.exists(path):
+                    object_info_path = path
+                    print(f"Found at: {path}")
+                    try:
+                        with open(object_info_path, 'r') as f:
+                            next(f)
+                            for line in f:
+                                parts = line.strip().split('\t')
+                                if len(parts) >= 5:
+                                    idx = int(parts[0])
+                                    name = parts[4].strip().lower()
+                                    class_names[idx] = name
+                        print(f"✓ Loaded {len(class_names)} ADE20K classes")
+                        return class_names
+                    except:
+                        continue
+            
+            print("Using fallback class names...")
             class_names = self.get_fallback_classes()
             
         return class_names
@@ -49,156 +95,37 @@ class ADEClassMapper:
     def get_fallback_classes(self):
         """Fallback mapping based on the data"""
         return {
-            1: 'wall',
-            2: 'building, edifice',
-            3: 'sky',
-            4: 'floor, flooring',
-            5: 'tree',
-            6: 'ceiling',
-            7: 'road, route',
-            8: 'bed',
-            9: 'windowpane, window',
-            10: 'grass',
-            11: 'cabinet',
-            12: 'sidewalk, pavement',
-            13: 'person, individual, someone, somebody, mortal, soul',
-            14: 'earth, ground',
-            15: 'door, double door',
-            16: 'table',
-            17: 'mountain, mount',
-            18: 'plant, flora, plant life',
-            19: 'curtain, drape, drapery, mantle, pall',
-            20: 'chair',
-            21: 'car, auto, automobile, machine, motorcar',
-            22: 'water',
-            23: 'painting, picture',
-            24: 'sofa, couch, lounge',
-            25: 'shelf',
-            26: 'house',
-            27: 'sea',
-            28: 'mirror',
-            29: 'rug, carpet, carpeting',
-            30: 'field',
-            31: 'armchair',
-            32: 'seat',
-            33: 'fence, fencing',
-            34: 'desk',
-            35: 'rock, stone',
-            36: 'wardrobe, closet, press',
-            37: 'lamp',
-            38: 'bathtub, bathing tub, bath, tub',
-            39: 'railing, rail',
-            40: 'cushion',
-            41: 'base, pedestal, stand',
-            42: 'box',
-            43: 'column, pillar',
-            44: 'signboard, sign',
-            45: 'chest of drawers, chest, bureau, dresser',
-            46: 'counter',
-            47: 'sand',
-            48: 'sink',
-            49: 'skyscraper',
-            50: 'fireplace, hearth, open fireplace',
-            51: 'refrigerator, icebox',
-            52: 'grandstand, covered stand',
-            53: 'path',
-            54: 'stairs, steps',
-            55: 'runway',
-            56: 'case, display case, showcase, vitrine',
-            57: 'pool table, billiard table, snooker table',
-            58: 'pillow',
-            59: 'screen door, screen',
-            60: 'stairway, staircase',
-            61: 'river',
-            62: 'bridge, span',
-            63: 'bookcase',
-            64: 'blind, screen',
-            65: 'coffee table, cocktail table',
-            66: 'toilet, can, commode, crapper, pot, potty, stool, throne',
-            67: 'flower',
-            68: 'book',
-            69: 'hill',
-            70: 'bench',
-            71: 'countertop',
-            72: 'stove, kitchen stove, range, kitchen range, cooking stove',
-            73: 'palm, palm tree',
-            74: 'kitchen island',
-            75: 'computer, computing machine, computing device, data processor, electronic computer, information processing system',
-            76: 'swivel chair',
-            77: 'boat',
-            78: 'bar',
-            79: 'arcade machine',
-            80: 'hovel, hut, hutch, shack, shanty',
-            81: 'bus, autobus, coach, charabanc, double-decker, jitney, motorbus, motorcoach, omnibus, passenger vehicle',
-            82: 'towel',
-            83: 'light, light source',
-            84: 'truck, motortruck',
-            85: 'tower',
-            86: 'chandelier, pendant, pendent',
-            87: 'awning, sunshade, sunblind',
-            88: 'streetlight, street lamp',
-            89: 'booth, cubicle, stall, kiosk',
-            90: 'television receiver, television, television set, tv, tv set, idiot box, boob tube, telly, goggle box',
-            91: 'airplane, aeroplane, plane',
-            92: 'dirt track',
-            93: 'apparel, wearing apparel, dress, clothes',
-            94: 'pole',
-            95: 'land, ground, soil',
-            96: 'bannister, banister, balustrade, balusters, handrail',
-            97: 'escalator, moving staircase, moving stairway',
-            98: 'ottoman, pouf, pouffe, puff, hassock',
-            99: 'bottle',
-            100: 'buffet, counter, sideboard',
-            101: 'poster, posting, placard, notice, bill, card',
-            102: 'stage',
-            103: 'van',
-            104: 'ship',
-            105: 'fountain',
-            106: 'conveyer belt, conveyor belt, conveyer, conveyor, transporter',
-            107: 'canopy',
-            108: 'washer, automatic washer, washing machine',
-            109: 'plaything, toy',
-            110: 'swimming pool, swimming bath, natatorium',
-            111: 'stool',
-            112: 'barrel, cask',
-            113: 'basket, handbasket',
-            114: 'waterfall, falls',
-            115: 'tent, collapsible shelter',
-            116: 'bag',
-            117: 'minibike, motorbike',
-            118: 'cradle',
-            119: 'oven',
-            120: 'ball',
-            121: 'food, solid food',
-            122: 'step, stair',
-            123: 'tank, storage tank',
-            124: 'trade name, brand name, brand, marque',
-            125: 'microwave, microwave oven',
-            126: 'pot, flowerpot',
-            127: 'animal, animate being, beast, brute, creature, fauna',
-            128: 'bicycle, bike, wheel, cycle',
-            129: 'lake',
-            130: 'dishwasher, dish washer, dishwashing machine',
-            131: 'screen, silver screen, projection screen',
-            132: 'blanket, cover',
-            133: 'sculpture',
-            134: 'hood, exhaust hood',
-            135: 'sconce',
-            136: 'vase',
-            137: 'traffic light, traffic signal, stoplight',
-            138: 'tray',
-            139: 'ashcan, trash can, garbage can, wastebin, ash bin, ash-bin, ashbin, dustbin, trash barrel, trash bin',
-            140: 'fan',
-            141: 'pier, wharf, wharfage, dock',
-            142: 'crt screen',
-            143: 'plate',
-            144: 'monitor, monitoring device',
-            145: 'bulletin board, notice board',
-            146: 'shower',
-            147: 'radiator',
-            148: 'glass, drinking glass',
-            149: 'clock',
-            150: 'flag'
+            1: 'wall', 2: 'building, edifice', 3: 'sky', 4: 'floor, flooring',
+            5: 'tree', 6: 'ceiling', 7: 'road, route', 8: 'bed',
+            9: 'windowpane, window', 10: 'grass', 11: 'cabinet', 12: 'sidewalk, pavement',
+            13: 'person', 14: 'earth, ground', 15: 'door, double door', 16: 'table',
+            17: 'mountain, mount', 18: 'plant', 19: 'curtain', 20: 'chair',
+            21: 'car', 22: 'water', 23: 'painting', 24: 'sofa', 25: 'shelf',
+            26: 'house', 27: 'sea', 28: 'mirror', 29: 'rug, carpet', 30: 'field',
+            31: 'armchair', 32: 'seat', 33: 'fence', 34: 'desk', 35: 'rock',
+            36: 'wardrobe', 37: 'lamp', 38: 'bathtub', 39: 'railing', 40: 'cushion',
+            41: 'base', 42: 'box', 43: 'column', 44: 'signboard', 45: 'chest of drawers',
+            46: 'counter', 47: 'sand', 48: 'sink', 49: 'skyscraper', 50: 'fireplace',
+            51: 'refrigerator', 52: 'grandstand', 53: 'path', 54: 'stairs, steps', 55: 'runway',
+            56: 'case', 57: 'pool table', 58: 'pillow', 59: 'screen door', 60: 'stairway',
+            61: 'river', 62: 'bridge', 63: 'bookcase', 64: 'blind', 65: 'coffee table',
+            66: 'toilet', 67: 'flower', 68: 'book', 69: 'hill', 70: 'bench',
+            71: 'countertop', 72: 'stove', 73: 'palm tree', 74: 'kitchen island', 75: 'computer',
+            76: 'swivel chair', 77: 'boat', 78: 'bar', 79: 'arcade machine', 80: 'hovel',
+            81: 'bus', 82: 'towel', 83: 'light', 84: 'truck', 85: 'tower',
+            86: 'chandelier', 87: 'awning', 88: 'streetlight', 89: 'booth', 90: 'television',
+            91: 'airplane', 92: 'dirt track', 93: 'apparel', 94: 'pole', 95: 'land',
+            96: 'bannister', 97: 'escalator', 98: 'ottoman', 99: 'bottle', 100: 'buffet',
+            101: 'poster', 102: 'stage', 103: 'van', 104: 'ship', 105: 'fountain',
+            106: 'conveyer belt', 107: 'canopy', 108: 'washer', 109: 'toy', 110: 'swimming pool',
+            111: 'stool', 112: 'barrel', 113: 'basket', 114: 'waterfall', 115: 'tent',
+            116: 'bag', 117: 'minibike', 118: 'cradle', 119: 'oven', 120: 'ball',
+            121: 'food', 122: 'step', 123: 'tank', 124: 'brand', 125: 'microwave',
+            126: 'pot', 127: 'animal', 128: 'bicycle', 129: 'lake', 130: 'dishwasher',
+            131: 'screen', 132: 'blanket', 133: 'sculpture', 134: 'hood', 135: 'sconce',
+            136: 'vase', 137: 'traffic light', 138: 'tray', 139: 'trash can', 140: 'fan',
+            141: 'pier', 142: 'crt screen', 143: 'plate', 144: 'monitor', 145: 'bulletin board',
+            146: 'shower', 147: 'radiator', 148: 'glass', 149: 'clock', 150: 'flag'
         }
     
     def create_mapping(self):
@@ -218,19 +145,17 @@ class ADEClassMapper:
         
         # Floor classes (map to 0)
         floor_keywords = ['floor', 'flooring', 'carpet', 'rug', 'ground', 'path', 'sidewalk', 'pavement', 'tile', 'earth']
-        floor_ids = self._map_keywords(floor_keywords, 0, "FLOOR", mapping)
+        self._map_keywords(floor_keywords, 0, "FLOOR", mapping)
         
         # Door classes (map to 2)
-        door_keywords = ['door', 'doorway', 'doorframe', 'gate', 'screen door', 'entrance', 'exit', 'portal']
-        door_ids = self._map_keywords(door_keywords, 2, "DOOR", mapping)
+        door_keywords = ['door', 'doorway', 'doorframe', 'gate', 'screen door', 'entrance', 'exit']
+        self._map_keywords(door_keywords, 2, "DOOR", mapping)
         
-        # No-go zones (map to 3) - stairs, hazardous areas
+        # No-go zones (map to 3)
         nogo_keywords = ['stairs', 'stair', 'staircase', 'stairway', 'escalator', 'steps', 
-                        'fragile', 'restricted', 'danger', 'hole', 'pit', 'elevator shaft',
                         'river', 'lake', 'water', 'pool', 'ocean', 'sea', 'cliff', 'mountain',
-                        'fireplace', 'furnace', 'oven', 'stove', 'waterfall', 'fountain',
-                        'cliff', 'hill', 'mountain']
-        nogo_ids = self._map_keywords(nogo_keywords, 3, "NO-GO", mapping)
+                        'fireplace', 'waterfall', 'fountain', 'hill']
+        self._map_keywords(nogo_keywords, 3, "NO-GO", mapping)
         
         # Count mappings
         counts = {0: 0, 1: 0, 2: 0, 3: 0}
@@ -252,7 +177,6 @@ class ADEClassMapper:
         print(f"\n{class_name} (class {target_class}):")
         found_ids = []
         for ade_id, name in self.ade_class_names.items():
-            # Check if any keyword is in the name
             if any(keyword in name for keyword in keywords):
                 mapping[ade_id] = target_class
                 print(f"  ID {ade_id:3d}: {name[:60]}")
@@ -261,88 +185,26 @@ class ADEClassMapper:
             print(f"  No matches found")
         return found_ids
     
-    def print_mapping_details(self):
-        """Print detailed mapping for verification"""
-        print("\n" + "="*60)
-        print("DETAILED MAPPING BY CLASS")
-        print("="*60)
-        
-        # Group by navigation class
-        nav_classes = {0: [], 1: [], 2: [], 3: []}
-        
-        for ade_id, nav_class in self.mapping.items():
-            nav_classes[nav_class].append((ade_id, self.ade_class_names[ade_id]))
-        
-        # Print each navigation class
-        for nav_class, class_name in enumerate(Config.CLASS_NAMES):
-            print(f"\n{class_name.upper()} (class {nav_class}):")
-            items = nav_classes[nav_class]
-            if items:
-                # Sort by ADE ID
-                items.sort()
-                for ade_id, name in items[:15]:  # Show first 15
-                    print(f"  ID {ade_id:3d}: {name[:60]}")
-                if len(items) > 15:
-                    print(f"  ... and {len(items)-15} more")
-            else:
-                print("  No classes mapped")
-    
     def save_mapping(self):
         """Save mapping to file"""
-        mapping_path = os.path.join(Config.BASE_PATH, 'ade_to_nav_mapping.pkl')
+        base_path = getattr(Config, 'BASE_PATH', '/content/Indoor-Segmentation-Navigation')
+        mapping_path = os.path.join(base_path, 'ade_to_nav_mapping.pkl')
+        os.makedirs(os.path.dirname(mapping_path), exist_ok=True)
+        
         with open(mapping_path, 'wb') as f:
             pickle.dump(self.mapping, f)
         print(f"\n✓ Mapping saved to '{mapping_path}'")
-        
-        # Also save as text for readability
-        txt_path = os.path.join(Config.OUTPUT_PATH, 'class_mapping.txt')
-        with open(txt_path, 'w') as f:
-            f.write("ADE20K to Navigation Classes Mapping\n")
-            f.write("="*60 + "\n\n")
-            for ade_id, nav_class in sorted(self.mapping.items()):
-                name = self.ade_class_names.get(ade_id, "unknown")
-                f.write(f"ADE ID {ade_id:3d} ({name:40s}) -> {Config.CLASS_NAMES[nav_class]} (class {nav_class})\n")
-        print(f"✓ Text mapping saved to '{txt_path}'")
-
-    def create_custom_mapping(self):
-        """Create a custom mapping based on manual inspection"""
-        # This is a more accurate mapping based on your actual classes
-        custom_map = {}
-        
-        # Set default for all to obstacle/wall
-        for i in range(1, 151):
-            custom_map[i] = 1
-        
-        # Floor (class 0)
-        floor_ids = [4, 12, 14, 29, 53, 95]  # floor, sidewalk, earth, rug, path, land
-        for idx in floor_ids:
-            custom_map[idx] = 0
-            
-        # Door (class 2)
-        door_ids = [15, 59]  # door, screen door
-        for idx in door_ids:
-            custom_map[idx] = 2
-            
-        # No-go (class 3)
-        nogo_ids = [17, 22, 27, 50, 54, 55, 60, 61, 69, 72, 97, 105, 110, 114, 119, 122, 125, 129]  # stairs, water, mountain, etc.
-        for idx in nogo_ids:
-            custom_map[idx] = 3
-            
-        return custom_map
 
 # Run if script is executed directly
 if __name__ == "__main__":
-    mapper = ADEClassMapper()
+    print("="*60)
+    print("RUNNING CLASS MAPPER")
+    print("="*60)
     
-    # Option 1: Use keyword-based mapping
-    mapper.print_mapping_details()
+    mapper = ADEClassMapper()
     mapper.save_mapping()
     
-    # Option 2: Uncomment below to use custom mapping instead
-    # mapper.mapping = mapper.create_custom_mapping()
-    # mapper.print_mapping_details()
-    # mapper.save_mapping()
-    
     print("\n" + "="*60)
-    print("Next step: Run 'python src/data_prep.py' to test the dataset with this mapping")
+    print("✅ Class mapping complete!")
+    print("   Mapping saved to: ade_to_nav_mapping.pkl")
     print("="*60)
