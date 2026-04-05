@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import time
 
-from src.config import Config
-from src.model import IndoorSegmentationModel, IndoorSegmentationLoss
-from src.data_prep import get_dataloaders
+from config import Config
+from model import IndoorSegmentationModel, IndoorSegmentationLoss
+from data_prep import get_dataloaders
 
 class Trainer:
     def __init__(self):
