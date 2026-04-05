@@ -11,3 +11,15 @@ Semantic segmentation for indoor mobile robot navigation.
 ## Installation
 ```bash
 pip install -r requirements.txt
+```
+
+## Download ADE20K dataset
+
+```bash
+wget http://data.csail.mit.edu/places/ADEchallenge/ADEChallengeData2016.zip
+unzip ADEChallengeData2016.zip
+```
+## Run class_mapper
+```bash
+python src/class_mapper.py
+```
