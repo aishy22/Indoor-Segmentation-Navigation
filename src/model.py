@@ -1,5 +1,4 @@
 # src/model.py
-# src/model.py
 import torch
 import torch.nn as nn
 import segmentation_models_pytorch as smp
@@ -32,13 +31,13 @@ class IndoorSegmentationModel(nn.Module):
         
         # Create U-Net model with pre-trained ResNet50 encoder
         self.model = smp.Unet(
-            encoder_name=self.encoder_name,
+            encoder_name=encoder_name,
             encoder_weights=encoder_weights,
             in_channels=3,
             classes=self.num_classes,
             activation=None,
             decoder_use_batchnorm=True,
-            decoder_dropout=0.3,  # Add dropout to prevent overfitting
+            decoder_dropout=0.5,  # Add dropout to prevent overfitting
         )
         
         print(f"✓ Created U-Net model with {self.encoder_name} encoder")
