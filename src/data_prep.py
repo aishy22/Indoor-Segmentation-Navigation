@@ -131,6 +131,10 @@ class IndoorNavigationDataset(Dataset):
             image = augmented['image']
             mask = augmented['mask']
             mask = mask.long()
+        else:
+            # Convert to tensor if no transform
+            image = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
+            mask = torch.from_numpy(mask).long()
         
         return image, mask
 
@@ -193,21 +197,38 @@ if __name__ == "__main__":
     
     if len(dataset) > 0:
         image, mask = dataset[0]
-        print(f"Image shape: {image.shape}")
-        print(f"Mask shape: {mask.shape}")
-        print(f"Mask unique values: {torch.unique(mask)}")
+        
+        # Convert to numpy for printing if they are tensors
+        if torch.is_tensor(image):
+            img_np = image.permute(1, 2, 0).numpy()
+            mask_np = mask.numpy()
+        else:
+            img_np = image
+            mask_np = mask
+        
+        print(f"Image shape: {img_np.shape}")
+        print(f"Mask shape: {mask_np.shape}")
+        print(f"Mask unique values: {np.unique(mask_np)}")
         
         # Visualize
         fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-        img_display = image.permute(1, 2, 0).numpy()
-        axes[0].imshow(img_display)
+        
+        if torch.is_tensor(image):
+            axes[0].imshow(image.permute(1, 2, 0).numpy())
+        else:
+            axes[0].imshow(image)
         axes[0].set_title('Original Image')
         axes[0].axis('off')
         
-        axes[1].imshow(mask.numpy(), cmap='tab10', vmin=0, vmax=3)
+        if torch.is_tensor(mask):
+            axes[1].imshow(mask.numpy(), cmap='tab10', vmin=0, vmax=3)
+        else:
+            axes[1].imshow(mask, cmap='tab10', vmin=0, vmax=3)
         axes[1].set_title('Segmentation Mask')
         axes[1].axis('off')
         
         plt.tight_layout()
         plt.show()
         print("\n✓ Dataset test complete!")
+    else:
+        print("No images loaded. Check dataset path.")
