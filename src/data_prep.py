@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 import pickle
-from src.config import Config
+from config import Config
 
 class IndoorNavigationDataset(Dataset):
     """
