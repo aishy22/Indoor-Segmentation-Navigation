@@ -31,7 +31,7 @@ class IndoorSegmentationModel(nn.Module):
         
         # Create U-Net model with pre-trained ResNet50 encoder
         self.model = smp.Unet(
-            encoder_name=encoder_name,
+            encoder_name=self.encoder_name,
             encoder_weights=encoder_weights,
             in_channels=3,
             classes=self.num_classes,
