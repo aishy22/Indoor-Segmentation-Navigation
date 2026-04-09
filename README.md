@@ -73,16 +73,23 @@ print("\n✅ Done!")
 ```
 ## Challenges and Solution
 **Large Dataset**:The ADE20K dataset's 20GB size with 22,000+ images posed significant storage and memory challenges. Using Google Colab Pro's high-RAM environment and GPU acceleration, this implemented efficient PyTorch DataLoaders with batch processing to stream data dynamically during training. This approach eliminated memory bottlenecks and enabled smooth training on the full dataset.
+
 **Path Hugging Walls**:Standard A* path planning prioritizes shortest distance, often producing paths that hug dangerously close to walls and obstacles. This project solved this by implementing a distance transform that calculates each cell's proximity to obstacles, then adding penalty costs for cells within a 25-pixel safety margin. This creates a "safety bubble" around obstacles, ensuring paths maintain safe distance while still finding efficient routes.
+
 **Overfitting**:
 
 ## Future Improvements 
 **Real-time video processing**: Extend from single images to live video streams by optimizing inference speed and implementing frame-to-frame consistency for smoother robot navigation.
+
 **Dynamic obstacle avoidance**: Incorporate real-time object detection to handle moving obstacles like people and pets, allowing the robot to dynamically re-plan paths.
+
 **Better door detection**:Collect more door examples to improve door detection accuracy, currently the weakest class due to limited training samples.
 
 ## Applications
 **Home robots**: Roomba-style vacuums that understand room layouts
+
 **Hospital robots**: Deliver medicine without bumping into equipment
+
 **Warehouse robots**: Navigate between shelves safely
+
 **Assisstive robots**: Help visually impaired people navigate indoors
