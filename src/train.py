@@ -2,6 +2,8 @@
 
 import os
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -13,7 +15,31 @@ sys.path.insert(0, '/content/Indoor-Segmentation-Navigation/src')
 
 from config import Config
 from data_prep import get_dataloaders
-from model import create_model, create_loss
+from model import create_model
+
+
+# ============================================
+# FOCAL LOSS
+# ============================================
+class FocalLoss(nn.Module):
+    """
+    Focal Loss with class weights.
+    Penalizes dominant classes (obstacle/wall) and focuses
+    on rare classes (door, no-go) during training.
+    """
+    def __init__(self, class_weights, gamma=2.0):
+        super().__init__()
+        self.gamma = gamma
+        self.register_buffer('class_weights', class_weights)
+
+    def forward(self, logits, targets):
+        ce_loss    = F.cross_entropy(logits, targets,
+                                     weight=self.class_weights,
+                                     reduction='none')
+        pt         = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        loss       = focal_loss.mean()
+        return loss, ce_loss.mean(), torch.tensor(0.0, device=logits.device)
 
 
 # ============================================
@@ -52,7 +78,6 @@ def compute_miou(preds, targets, num_classes=4):
 def main():
     Config.setup()
 
-    # Device is checked at runtime here
     device = Config.get_device()
     print(f"\n🔧 Detected device: {device}")
     if device == 'cpu':
@@ -71,8 +96,15 @@ def main():
     model = create_model(pretrained=True).to(device)
 
     # ── Loss ──────────────────────────────────
-    class_weights = torch.tensor([0.8, 0.5, 1.5, 2.0]).to(device)
-    criterion     = create_loss(class_weights=class_weights)
+    # Weights computed from actual training data frequencies:
+    #   floor=9.6%  obstacle/wall=83.65%  door=1.28%  no-go=5.47%
+    class_weights = torch.tensor(
+        [0.3868, 0.0444, 2.8897, 0.6791]
+    ).to(device)
+    criterion = FocalLoss(class_weights=class_weights, gamma=2.0).to(device)
+
+    print("\n✅ Loss function : FocalLoss (gamma=2.0)")
+    print(f"   Class weights : {class_weights.tolist()}")
 
     # ── Optimizer & Scheduler ─────────────────
     optimizer = torch.optim.AdamW(
@@ -96,7 +128,7 @@ def main():
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         best_val_loss = checkpoint.get('best_val_loss', float('inf'))
         start_epoch   = checkpoint.get('epoch', 0) + 1
-        print(f"   Resuming from epoch {start_epoch} (best val loss so far: {best_val_loss:.4f})")
+        print(f"   Resuming from epoch {start_epoch} (best val loss: {best_val_loss:.4f})")
     else:
         print("\n🚀 No checkpoint found — starting fresh training.")
 
@@ -123,8 +155,8 @@ def main():
             masks  = masks.to(device)
 
             optimizer.zero_grad()
-            outputs          = model(images)
-            total, ce, dice  = criterion(outputs, masks)
+            outputs         = model(images)
+            total, ce, dice = criterion(outputs, masks)
             total.backward()
             optimizer.step()
 
