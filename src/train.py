@@ -1,4 +1,5 @@
 # src/train.py
+
 import os
 import torch
 import numpy as np
@@ -27,7 +28,7 @@ def compute_miou(preds, targets, num_classes=4):
     Returns:
         miou: float — mean IoU across all classes
     """
-    ious = []
+    ious    = []
     preds   = preds.cpu().numpy().flatten()
     targets = targets.cpu().numpy().flatten()
 
@@ -36,10 +37,9 @@ def compute_miou(preds, targets, num_classes=4):
         target_cls = (targets == cls)
 
         intersection = np.logical_and(pred_cls, target_cls).sum()
-        union        = np.logical_or(pred_cls, target_cls).sum()
+        union        = np.logical_or(pred_cls,  target_cls).sum()
 
         if union == 0:
-            # Class not present in this batch — skip it
             continue
         ious.append(intersection / union)
 
@@ -50,8 +50,17 @@ def compute_miou(preds, targets, num_classes=4):
 # MAIN TRAINING
 # ============================================
 def main():
-    # Setup directories and print config
     Config.setup()
+
+    # Device is checked at runtime here
+    device = Config.get_device()
+    print(f"\n🔧 Detected device: {device}")
+    if device == 'cpu':
+        print("⚠️ WARNING: Training on CPU — this will be very slow!")
+        print("   → Go to Runtime > Change runtime type and select a GPU.")
+    else:
+        print(f"   GPU: {torch.cuda.get_device_name(0)}")
+
     Config.print_config()
 
     # ── Data ──────────────────────────────────
@@ -59,13 +68,11 @@ def main():
     train_loader, val_loader = get_dataloaders()
 
     # ── Model ─────────────────────────────────
-    print(f"\n🔧 Using device: {Config.DEVICE}")
-    model = create_model(pretrained=True).to(Config.DEVICE)
+    model = create_model(pretrained=True).to(device)
 
     # ── Loss ──────────────────────────────────
-    # Upweight rare classes: door (1.5) and no-go (2.0)
-    class_weights = torch.tensor([0.8, 0.5, 1.5, 2.0]).to(Config.DEVICE)
-    criterion = create_loss(class_weights=class_weights)
+    class_weights = torch.tensor([0.8, 0.5, 1.5, 2.0]).to(device)
+    criterion     = create_loss(class_weights=class_weights)
 
     # ── Optimizer & Scheduler ─────────────────
     optimizer = torch.optim.AdamW(
@@ -77,18 +84,34 @@ def main():
         optimizer, mode='min', factor=0.5, patience=3
     )
 
+    # ── Resume from checkpoint if available ──
+    start_epoch     = 1
+    best_val_loss   = float('inf')
+    checkpoint_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth')
+
+    if os.path.exists(checkpoint_path):
+        print(f"\n💾 Found existing checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        start_epoch   = checkpoint.get('epoch', 0) + 1
+        print(f"   Resuming from epoch {start_epoch} (best val loss so far: {best_val_loss:.4f})")
+    else:
+        print("\n🚀 No checkpoint found — starting fresh training.")
+
     # ── Training Loop ─────────────────────────
-    best_val_loss = float('inf')
     train_losses, val_losses, val_mious = [], [], []
 
     print("\n" + "=" * 60)
     print("🚀 STARTING TRAINING")
     print(f"   Training batches  : {len(train_loader)}")
     print(f"   Validation batches: {len(val_loader)}")
-    print(f"   Epochs            : {Config.EPOCHS}")
+    print(f"   Epochs            : {start_epoch} → {Config.EPOCHS}")
+    print(f"   Device            : {device}")
     print("=" * 60)
 
-    for epoch in range(1, Config.EPOCHS + 1):
+    for epoch in range(start_epoch, Config.EPOCHS + 1):
 
         # ── Train ───────────────────────────────
         model.train()
@@ -96,12 +119,12 @@ def main():
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{Config.EPOCHS} [Train]")
         for images, masks in pbar:
-            images = images.to(Config.DEVICE)
-            masks  = masks.to(Config.DEVICE)
+            images = images.to(device)
+            masks  = masks.to(device)
 
             optimizer.zero_grad()
-            outputs             = model(images)
-            total, ce, dice     = criterion(outputs, masks)
+            outputs          = model(images)
+            total, ce, dice  = criterion(outputs, masks)
             total.backward()
             optimizer.step()
 
@@ -117,20 +140,19 @@ def main():
 
         # ── Validate ────────────────────────────
         model.eval()
-        val_loss  = 0.0
+        val_loss    = 0.0
         all_preds   = []
         all_targets = []
 
         with torch.no_grad():
             for images, masks in tqdm(val_loader, desc=f"Epoch {epoch}/{Config.EPOCHS} [Val]"):
-                images = images.to(Config.DEVICE)
-                masks  = masks.to(Config.DEVICE)
+                images = images.to(device)
+                masks  = masks.to(device)
 
-                outputs          = model(images)
-                total, ce, dice  = criterion(outputs, masks)
-                val_loss        += total.item()
+                outputs         = model(images)
+                total, ce, dice = criterion(outputs, masks)
+                val_loss       += total.item()
 
-                # Collect predictions for mIoU
                 preds = torch.argmax(outputs, dim=1)
                 all_preds.append(preds)
                 all_targets.append(masks)
@@ -138,8 +160,7 @@ def main():
         avg_val_loss = val_loss / len(val_loader)
         val_losses.append(avg_val_loss)
 
-        # Compute mIoU over full validation set
-        all_preds   = torch.cat(all_preds,   dim=0)
+        all_preds   = torch.cat(all_preds, dim=0)
         all_targets = torch.cat(all_targets, dim=0)
         miou        = compute_miou(all_preds, all_targets, num_classes=Config.NUM_CLASSES)
         val_mious.append(miou)
@@ -156,7 +177,6 @@ def main():
         # ── Save best checkpoint ─────────────────
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            checkpoint_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth')
             torch.save({
                 'epoch'               : epoch,
                 'model_state_dict'    : model.state_dict(),
@@ -171,7 +191,7 @@ def main():
     print(f"   Best val mIoU : {max(val_mious):.4f}")
 
     # ── Plot Training History ──────────────────
-    epochs_range = range(1, Config.EPOCHS + 1)
+    epochs_range = range(start_epoch, start_epoch + len(train_losses))
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
@@ -197,6 +217,5 @@ def main():
     print(f"✓ Training history saved to: {plot_path}")
 
 
-# ─────────────────────────────────────────────
 if __name__ == "__main__":
     main()
