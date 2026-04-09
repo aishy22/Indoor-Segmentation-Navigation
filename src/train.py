@@ -74,7 +74,7 @@ def main():
         weight_decay=1e-4
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=3, verbose=True
+        optimizer, mode='min', factor=0.5, patience=3
     )
 
     # ── Training Loop ─────────────────────────
