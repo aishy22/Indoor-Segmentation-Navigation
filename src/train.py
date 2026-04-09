@@ -1,227 +1,202 @@
-# src/train.py - Final Working Version
-# Trains on full ADE20K dataset with pre-trained weights
-
+# src/train.py
 import os
 import torch
-import torch.nn as nn
-import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-import pickle
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-from torch.utils.data import Dataset, DataLoader
-import segmentation_models_pytorch as smp
+import sys
+
+# Path setup for Colab
+sys.path.insert(0, '/content/Indoor-Segmentation-Navigation')
+sys.path.insert(0, '/content/Indoor-Segmentation-Navigation/src')
+
+from config import Config
+from data_prep import get_dataloaders
+from model import create_model, create_loss
+
 
 # ============================================
-# CONFIGURATION
+# mIoU METRIC
 # ============================================
-class Config:
-    DATA_PATH = '/content/ADEChallengeData2016'
-    MODEL_SAVE_PATH = '/content/Indoor-Segmentation-Navigation/models'
-    OUTPUT_PATH = '/content/Indoor-Segmentation-Navigation/outputs'
-    BATCH_SIZE = 16
-    EPOCHS = 15
-    LEARNING_RATE = 1e-4
-    NUM_WORKERS = 2
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+def compute_miou(preds, targets, num_classes=4):
+    """
+    Compute mean Intersection over Union across all classes.
+    Args:
+        preds  : (B, H, W) predicted class indices
+        targets: (B, H, W) ground truth class indices
+    Returns:
+        miou: float — mean IoU across all classes
+    """
+    ious = []
+    preds   = preds.cpu().numpy().flatten()
+    targets = targets.cpu().numpy().flatten()
 
-# ============================================
-# CLASS MAPPING
-# ============================================
-def create_class_mapping():
-    class_mapping = {}
-    for i in range(1, 151):
-        class_mapping[i] = 1  # Default: wall
-    
-    # Floor (class 0)
-    floor_ids = [4, 12, 14, 29, 53, 95, 7, 30, 55]
-    for idx in floor_ids:
-        class_mapping[idx] = 0
-    
-    # Door (class 2)
-    door_ids = [15, 59]
-    for idx in door_ids:
-        class_mapping[idx] = 2
-    
-    # No-go (class 3)
-    nogo_ids = [54, 60, 97, 61, 17, 22, 27, 50, 69, 72, 105, 110, 114, 122]
-    for idx in nogo_ids:
-        class_mapping[idx] = 3
-    
-    return class_mapping
+    for cls in range(num_classes):
+        pred_cls   = (preds == cls)
+        target_cls = (targets == cls)
 
-# ============================================
-# DATASET CLASS
-# ============================================
-class ADE20KDataset(Dataset):
-    def __init__(self, split='train', transform=None):
-        self.split = split
-        self.transform = transform
-        self.class_mapping = create_class_mapping()
-        
-        base_path = Config.DATA_PATH
-        self.images_dir = f'{base_path}/images/{split}'
-        self.masks_dir = f'{base_path}/annotations/{split}'
-        
-        self.images = [f for f in os.listdir(self.images_dir) if f.endswith('.jpg')]
-        print(f"Loaded {len(self.images)} {split} images")
-    
-    def __len__(self):
-        return len(self.images)
-    
-    def apply_mapping(self, mask):
-        result = np.ones_like(mask, dtype=np.uint8)
-        for orig, new in self.class_mapping.items():
-            result[mask == orig] = new
-        return result
-    
-    def __getitem__(self, idx):
-        img_name = self.images[idx]
-        img_path = os.path.join(self.images_dir, img_name)
-        mask_path = os.path.join(self.masks_dir, img_name.replace('.jpg', '.png'))
-        
-        img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-        mask = self.apply_mapping(mask)
-        
-        if self.transform:
-            transformed = self.transform(image=img, mask=mask)
-            img = transformed['image']
-            mask = transformed['mask']
-            mask = mask.long()
-        
-        return img, mask
+        intersection = np.logical_and(pred_cls, target_cls).sum()
+        union        = np.logical_or(pred_cls, target_cls).sum()
+
+        if union == 0:
+            # Class not present in this batch — skip it
+            continue
+        ious.append(intersection / union)
+
+    return np.mean(ious) if ious else 0.0
+
 
 # ============================================
 # MAIN TRAINING
 # ============================================
 def main():
-    # Create directories
-    os.makedirs(Config.MODEL_SAVE_PATH, exist_ok=True)
-    os.makedirs(Config.OUTPUT_PATH, exist_ok=True)
-    
-    # Transforms
-    train_transform = A.Compose([
-        A.Resize(256, 256),
-        A.HorizontalFlip(p=0.5),
-        A.RandomRotate90(p=0.3),
-        A.RandomBrightnessContrast(p=0.2),
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ToTensorV2()
-    ])
-    
-    val_transform = A.Compose([
-        A.Resize(256, 256),
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ToTensorV2()
-    ])
-    
-    # Datasets
-    print("📁 Creating datasets...")
-    train_dataset = ADE20KDataset('training', transform=train_transform)
-    val_dataset = ADE20KDataset('validation', transform=val_transform)
-    
-    train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True, num_workers=Config.NUM_WORKERS)
-    val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=Config.NUM_WORKERS)
-    
-    print(f"Train batches: {len(train_loader)}")
-    print(f"Val batches: {len(val_loader)}")
-    
-    # Model
+    # Setup directories and print config
+    Config.setup()
+    Config.print_config()
+
+    # ── Data ──────────────────────────────────
+    print("\n📁 Creating datasets...")
+    train_loader, val_loader = get_dataloaders()
+
+    # ── Model ─────────────────────────────────
     print(f"\n🔧 Using device: {Config.DEVICE}")
-    model = smp.Unet(
-        encoder_name='resnet50',
-        encoder_weights='imagenet',
-        in_channels=3,
-        classes=4,
-        decoder_dropout=0.3,
-    ).to(Config.DEVICE)
-    
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    
-    # Training setup
+    model = create_model(pretrained=True).to(Config.DEVICE)
+
+    # ── Loss ──────────────────────────────────
+    # Upweight rare classes: door (1.5) and no-go (2.0)
     class_weights = torch.tensor([0.8, 0.5, 1.5, 2.0]).to(Config.DEVICE)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=Config.LEARNING_RATE, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
-    
-    # Training loop
+    criterion = create_loss(class_weights=class_weights)
+
+    # ── Optimizer & Scheduler ─────────────────
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=Config.LEARNING_RATE,
+        weight_decay=1e-4
+    )
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=3, verbose=True
+    )
+
+    # ── Training Loop ─────────────────────────
     best_val_loss = float('inf')
-    train_losses, val_losses = [], []
-    
-    print("\n" + "="*60)
+    train_losses, val_losses, val_mious = [], [], []
+
+    print("\n" + "=" * 60)
     print("🚀 STARTING TRAINING")
-    print(f"   Training images: {len(train_dataset)}")
-    print(f"   Validation images: {len(val_dataset)}")
-    print(f"   Epochs: {Config.EPOCHS}")
-    print("="*60)
-    
+    print(f"   Training batches  : {len(train_loader)}")
+    print(f"   Validation batches: {len(val_loader)}")
+    print(f"   Epochs            : {Config.EPOCHS}")
+    print("=" * 60)
+
     for epoch in range(1, Config.EPOCHS + 1):
-        # Training
+
+        # ── Train ───────────────────────────────
         model.train()
-        train_loss = 0
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{Config.EPOCHS}")
+        train_loss = 0.0
+
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{Config.EPOCHS} [Train]")
         for images, masks in pbar:
-            images, masks = images.to(Config.DEVICE), masks.to(Config.DEVICE)
-            
+            images = images.to(Config.DEVICE)
+            masks  = masks.to(Config.DEVICE)
+
             optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, masks)
-            loss.backward()
+            outputs             = model(images)
+            total, ce, dice     = criterion(outputs, masks)
+            total.backward()
             optimizer.step()
-            
-            train_loss += loss.item()
-            pbar.set_postfix({'loss': f'{loss.item():.4f}'})
-        
+
+            train_loss += total.item()
+            pbar.set_postfix({
+                'loss': f'{total.item():.4f}',
+                'ce'  : f'{ce.item():.4f}',
+                'dice': f'{dice.item():.4f}'
+            })
+
         avg_train_loss = train_loss / len(train_loader)
         train_losses.append(avg_train_loss)
-        
-        # Validation
+
+        # ── Validate ────────────────────────────
         model.eval()
-        val_loss = 0
+        val_loss  = 0.0
+        all_preds   = []
+        all_targets = []
+
         with torch.no_grad():
-            for images, masks in val_loader:
-                images, masks = images.to(Config.DEVICE), masks.to(Config.DEVICE)
-                outputs = model(images)
-                loss = criterion(outputs, masks)
-                val_loss += loss.item()
-        
+            for images, masks in tqdm(val_loader, desc=f"Epoch {epoch}/{Config.EPOCHS} [Val]"):
+                images = images.to(Config.DEVICE)
+                masks  = masks.to(Config.DEVICE)
+
+                outputs          = model(images)
+                total, ce, dice  = criterion(outputs, masks)
+                val_loss        += total.item()
+
+                # Collect predictions for mIoU
+                preds = torch.argmax(outputs, dim=1)
+                all_preds.append(preds)
+                all_targets.append(masks)
+
         avg_val_loss = val_loss / len(val_loader)
         val_losses.append(avg_val_loss)
+
+        # Compute mIoU over full validation set
+        all_preds   = torch.cat(all_preds,   dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
+        miou        = compute_miou(all_preds, all_targets, num_classes=Config.NUM_CLASSES)
+        val_mious.append(miou)
+
         scheduler.step(avg_val_loss)
-        
-        print(f"Epoch {epoch}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}")
-        
+
+        print(
+            f"\nEpoch {epoch:02d}/{Config.EPOCHS} | "
+            f"Train Loss: {avg_train_loss:.4f} | "
+            f"Val Loss: {avg_val_loss:.4f} | "
+            f"Val mIoU: {miou:.4f}"
+        )
+
+        # ── Save best checkpoint ─────────────────
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth'))
-            print(f"  ✓ Saved best model (val_loss: {best_val_loss:.4f})")
-    
-    print(f"\n✅ Training complete! Best val loss: {best_val_loss:.4f}")
-    
-    # Plot results
-    plt.figure(figsize=(10, 5))
-    plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Val Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Training History')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(Config.OUTPUT_PATH, 'training_history.png'))
+            checkpoint_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth')
+            torch.save({
+                'epoch'               : epoch,
+                'model_state_dict'    : model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_val_loss'       : best_val_loss,
+                'val_miou'            : miou,
+            }, checkpoint_path)
+            print(f"  ✓ Saved best model → val_loss: {best_val_loss:.4f} | mIoU: {miou:.4f}")
+
+    print(f"\n✅ Training complete!")
+    print(f"   Best val loss : {best_val_loss:.4f}")
+    print(f"   Best val mIoU : {max(val_mious):.4f}")
+
+    # ── Plot Training History ──────────────────
+    epochs_range = range(1, Config.EPOCHS + 1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    axes[0].plot(epochs_range, train_losses, label='Train Loss', marker='o')
+    axes[0].plot(epochs_range, val_losses,   label='Val Loss',   marker='o')
+    axes[0].set_title('Loss History')
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Loss')
+    axes[0].legend()
+    axes[0].grid(True)
+
+    axes[1].plot(epochs_range, val_mious, label='Val mIoU', marker='o', color='green')
+    axes[1].set_title('Validation mIoU History')
+    axes[1].set_xlabel('Epoch')
+    axes[1].set_ylabel('mIoU')
+    axes[1].legend()
+    axes[1].grid(True)
+
+    plt.tight_layout()
+    plot_path = os.path.join(Config.OUTPUT_PATH, 'training_history.png')
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
     plt.show()
-
-if __name__ == "__main__":
-    main()
-
-def main():
-    trainer = Trainer()
-    model = trainer.train()
-    print("\n✅ Training script completed!")
+    print(f"✓ Training history saved to: {plot_path}")
 
 
+# ─────────────────────────────────────────────
 if __name__ == "__main__":
     main()
