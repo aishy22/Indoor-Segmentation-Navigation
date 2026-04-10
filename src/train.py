@@ -48,7 +48,6 @@ class CombinedLoss(nn.Module):
     def forward(self, logits, targets):
         focal_loss, ce = self.focal(logits, targets)
 
-        # ── Dice Loss ──
         probs      = torch.softmax(logits, dim=1)
         targets_oh = torch.zeros_like(probs)
         targets_oh.scatter_(1, targets.unsqueeze(1), 1)
@@ -105,6 +104,14 @@ def main():
 
     Config.print_config()
 
+    # ── Fresh start — delete old checkpoint ───
+    checkpoint_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth')
+    if os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
+        print("\n🗑️  Deleted old checkpoint — fresh start!")
+    else:
+        print("\n🚀 No checkpoint found — starting fresh.")
+
     # ── Data ──────────────────────────────────
     print("\n📁 Creating datasets...")
     train_loader, val_loader = get_dataloaders()
@@ -113,7 +120,7 @@ def main():
     model = create_model(pretrained=True).to(device)
 
     # ── Loss ──────────────────────────────────
-    # door weight boosted 8.0 → 10.0 for round 2
+    # Best weights from data frequency analysis + tuned door weight
     class_weights = torch.tensor(
         [0.3868, 0.0444, 10.0, 1.5]
     ).to(device)
@@ -128,62 +135,44 @@ def main():
     print(f"   Gamma         : 2.0")
     print(f"   Dice weight   : 0.5")
 
-    # ── Optimizer — lower LR for fine-tuning ──
+    # ── Optimizer ─────────────────────────────
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=1e-5,           # 10x smaller than round 1
+        lr=1e-4,           # full LR for fresh training
         weight_decay=1e-4
     )
+
+    # ── Scheduler — tracks mIoU now ───────────
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max',   # now tracks mIoU (higher = better)
-        factor=0.5, patience=3
+        optimizer, mode='max',   # higher mIoU = better
+        factor=0.5, patience=4,  # more patient than before
+        verbose=True
     )
 
-    # ── Resume from checkpoint ────────────────
-    start_epoch   = 1
-    best_miou     = 0.0
-    checkpoint_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth')
+    # ── Training state ────────────────────────
+    start_epoch = 1
+    best_miou   = 0.0
+    TOTAL_EPOCHS = 40          # 40 epochs for full clean run
 
-    if os.path.exists(checkpoint_path):
-        print(f"\n💾 Found checkpoint: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path,
-                                map_location=device,
-                                weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        best_miou   = checkpoint.get('val_miou', 0.0)
-        start_epoch = checkpoint.get('epoch', 0) + 1
-        print(f"   Resuming from epoch {start_epoch}")
-        print(f"   Best mIoU so far : {best_miou:.4f}")
-    else:
-        print("\n🚀 No checkpoint found — starting fresh.")
-
-    # ── Override LR after loading checkpoint ──
-    # (checkpoint saves old LR — force new fine-tune LR)
-    for pg in optimizer.param_groups:
-        pg['lr'] = 1e-5
-    print(f"   LR forced to    : 1e-5")
-
-    # ── Training Loop ─────────────────────────
-    FINETUNE_EPOCHS = start_epoch + 14   # 15 fine-tune epochs
     train_losses, val_losses, val_mious = [], [], []
 
     print("\n" + "=" * 60)
-    print("🚀 STARTING FINE-TUNE TRAINING")
+    print("🚀 STARTING FULL CLEAN TRAINING (40 epochs)")
     print(f"   Training batches  : {len(train_loader)}")
     print(f"   Validation batches: {len(val_loader)}")
-    print(f"   Epochs            : {start_epoch} → {FINETUNE_EPOCHS}")
+    print(f"   Epochs            : {start_epoch} → {TOTAL_EPOCHS}")
+    print(f"   LR                : 1e-4 (full)")
     print(f"   Device            : {device}")
     print("=" * 60)
 
-    for epoch in range(start_epoch, FINETUNE_EPOCHS + 1):
+    for epoch in range(start_epoch, TOTAL_EPOCHS + 1):
 
         # ── Train ───────────────────────────────
         model.train()
         train_loss = 0.0
 
         pbar = tqdm(train_loader,
-                    desc=f"Epoch {epoch}/{FINETUNE_EPOCHS} [Train]")
+                    desc=f"Epoch {epoch}/{TOTAL_EPOCHS} [Train]")
         for images, masks in pbar:
             images = images.to(device)
             masks  = masks.to(device)
@@ -212,7 +201,7 @@ def main():
 
         with torch.no_grad():
             for images, masks in tqdm(val_loader,
-                                      desc=f"Epoch {epoch}/{FINETUNE_EPOCHS} [Val]"):
+                                      desc=f"Epoch {epoch}/{TOTAL_EPOCHS} [Val]"):
                 images = images.to(device)
                 masks  = masks.to(device)
 
@@ -233,10 +222,10 @@ def main():
                                    num_classes=Config.NUM_CLASSES)
         val_mious.append(miou)
 
-        scheduler.step(miou)   # scheduler now tracks mIoU
+        scheduler.step(miou)
 
         print(
-            f"\nEpoch {epoch:02d}/{FINETUNE_EPOCHS} | "
+            f"\nEpoch {epoch:02d}/{TOTAL_EPOCHS} | "
             f"Train Loss: {avg_train_loss:.4f} | "
             f"Val Loss: {avg_val_loss:.4f} | "
             f"Val mIoU: {miou:.4f}"
@@ -254,17 +243,17 @@ def main():
             }, checkpoint_path)
             print(f"  ✓ Saved best model → val_loss: {avg_val_loss:.4f} | mIoU: {miou:.4f}")
 
-    print(f"\n✅ Fine-tuning complete!")
+    print(f"\n✅ Training complete!")
     print(f"   Best mIoU : {best_miou:.4f}")
 
     # ── Plot Training History ──────────────────
-    epochs_range = range(start_epoch, start_epoch + len(train_losses))
+    epochs_range = range(1, len(train_losses) + 1)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     axes[0].plot(epochs_range, train_losses, label='Train Loss', marker='o')
     axes[0].plot(epochs_range, val_losses,   label='Val Loss',   marker='o')
-    axes[0].set_title('Fine-Tune Loss History')
+    axes[0].set_title('Loss History (Full Clean Run)')
     axes[0].set_xlabel('Epoch')
     axes[0].set_ylabel('Loss')
     axes[0].legend()
@@ -272,17 +261,17 @@ def main():
 
     axes[1].plot(epochs_range, val_mious, label='Val mIoU',
                  marker='o', color='green')
-    axes[1].set_title('Fine-Tune Validation mIoU')
+    axes[1].set_title('Validation mIoU (Full Clean Run)')
     axes[1].set_xlabel('Epoch')
     axes[1].set_ylabel('mIoU')
     axes[1].legend()
     axes[1].grid(True)
 
     plt.tight_layout()
-    plot_path = os.path.join(Config.OUTPUT_PATH, 'finetune_history.png')
+    plot_path = os.path.join(Config.OUTPUT_PATH, 'training_history_final.png')
     plt.savefig(plot_path, dpi=150, bbox_inches='tight')
     plt.show()
-    print(f"✓ Fine-tune history saved to: {plot_path}")
+    print(f"✓ Training history saved to: {plot_path}")
 
 
 if __name__ == "__main__":
