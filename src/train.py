@@ -146,7 +146,6 @@ def main():
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max',   # higher mIoU = better
         factor=0.5, patience=4,  # more patient than before
-        verbose=True
     )
 
     # ── Training state ────────────────────────
