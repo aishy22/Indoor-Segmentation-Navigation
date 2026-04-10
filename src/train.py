@@ -230,16 +230,16 @@ def main():
         )
 
         # ── Save best checkpoint ─────────────────
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
+        if miou > best_miou:
+            best_miou = miou
             torch.save({
                 'epoch'               : epoch,
                 'model_state_dict'    : model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'best_val_loss'       : best_val_loss,
+                'best_val_loss'       : avg_val_loss,
                 'val_miou'            : miou,
             }, checkpoint_path)
-            print(f"  ✓ Saved best model → val_loss: {best_val_loss:.4f} | mIoU: {miou:.4f}")
+            print(f"  ✓ Saved best model → val_loss: {avg_val_loss:.4f} | mIoU: {miou:.4f}")
 
     print(f"\n✅ Training complete!")
     print(f"   Best val loss : {best_val_loss:.4f}")
