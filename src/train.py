@@ -40,11 +40,6 @@ class FocalLoss(nn.Module):
 # COMBINED FOCAL + DICE LOSS
 # ============================================
 class CombinedLoss(nn.Module):
-    """
-    Focal Loss handles class imbalance.
-    Dice Loss specifically helps rare classes (door, no-go).
-    Together they push mIoU much higher than either alone.
-    """
     def __init__(self, class_weights, gamma=2.0, dice_weight=0.5):
         super().__init__()
         self.dice_weight = dice_weight
@@ -54,9 +49,8 @@ class CombinedLoss(nn.Module):
         focal_loss, ce = self.focal(logits, targets)
 
         # ── Dice Loss ──
-        num_classes = logits.shape[1]
-        probs       = torch.softmax(logits, dim=1)
-        targets_oh  = torch.zeros_like(probs)
+        probs      = torch.softmax(logits, dim=1)
+        targets_oh = torch.zeros_like(probs)
         targets_oh.scatter_(1, targets.unsqueeze(1), 1)
 
         dims      = (0, 2, 3)
@@ -106,17 +100,10 @@ def main():
     print(f"\n🔧 Detected device: {device}")
     if device == 'cpu':
         print("⚠️ WARNING: Training on CPU — this will be very slow!")
-        print("   → Go to Runtime > Change runtime type and select a GPU.")
     else:
         print(f"   GPU: {torch.cuda.get_device_name(0)}")
 
     Config.print_config()
-
-    # ── Delete stale checkpoint ────────────────
-    checkpoint_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth')
-    if os.path.exists(checkpoint_path):
-        os.remove(checkpoint_path)
-        print("\n🗑️  Deleted old checkpoint — starting fresh!")
 
     # ── Data ──────────────────────────────────
     print("\n📁 Creating datasets...")
@@ -126,10 +113,9 @@ def main():
     model = create_model(pretrained=True).to(device)
 
     # ── Loss ──────────────────────────────────
-    # Weights from actual data frequencies + boosted door weight
-    #   floor=9.6%  obstacle/wall=83.65%  door=1.28%  no-go=5.47%
+    # door weight boosted 8.0 → 10.0 for round 2
     class_weights = torch.tensor(
-        [0.3868, 0.0444, 8.0, 1.5]
+        [0.3868, 0.0444, 10.0, 1.5]
     ).to(device)
     criterion = CombinedLoss(
         class_weights=class_weights,
@@ -142,37 +128,62 @@ def main():
     print(f"   Gamma         : 2.0")
     print(f"   Dice weight   : 0.5")
 
-    # ── Optimizer & Scheduler ─────────────────
+    # ── Optimizer — lower LR for fine-tuning ──
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=Config.LEARNING_RATE,
+        lr=1e-5,           # 10x smaller than round 1
         weight_decay=1e-4
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=3
+        optimizer, mode='max',   # now tracks mIoU (higher = better)
+        factor=0.5, patience=3
     )
 
-    # ── Training Loop ─────────────────────────
+    # ── Resume from checkpoint ────────────────
     start_epoch   = 1
-    best_miou = 0.0
-    best_val_loss = float('inf')
+    best_miou     = 0.0
+    checkpoint_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pth')
+
+    if os.path.exists(checkpoint_path):
+        print(f"\n💾 Found checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path,
+                                map_location=device,
+                                weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        best_miou   = checkpoint.get('val_miou', 0.0)
+        start_epoch = checkpoint.get('epoch', 0) + 1
+        print(f"   Resuming from epoch {start_epoch}")
+        print(f"   Best mIoU so far : {best_miou:.4f}")
+    else:
+        print("\n🚀 No checkpoint found — starting fresh.")
+
+    # ── Override LR after loading checkpoint ──
+    # (checkpoint saves old LR — force new fine-tune LR)
+    for pg in optimizer.param_groups:
+        pg['lr'] = 1e-5
+    print(f"   LR forced to    : 1e-5")
+
+    # ── Training Loop ─────────────────────────
+    FINETUNE_EPOCHS = start_epoch + 14   # 15 fine-tune epochs
     train_losses, val_losses, val_mious = [], [], []
 
     print("\n" + "=" * 60)
-    print("🚀 STARTING TRAINING")
+    print("🚀 STARTING FINE-TUNE TRAINING")
     print(f"   Training batches  : {len(train_loader)}")
     print(f"   Validation batches: {len(val_loader)}")
-    print(f"   Epochs            : {start_epoch} → {Config.EPOCHS}")
+    print(f"   Epochs            : {start_epoch} → {FINETUNE_EPOCHS}")
     print(f"   Device            : {device}")
     print("=" * 60)
 
-    for epoch in range(start_epoch, Config.EPOCHS + 1):
+    for epoch in range(start_epoch, FINETUNE_EPOCHS + 1):
 
         # ── Train ───────────────────────────────
         model.train()
         train_loss = 0.0
 
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{Config.EPOCHS} [Train]")
+        pbar = tqdm(train_loader,
+                    desc=f"Epoch {epoch}/{FINETUNE_EPOCHS} [Train]")
         for images, masks in pbar:
             images = images.to(device)
             masks  = masks.to(device)
@@ -200,7 +211,8 @@ def main():
         all_targets = []
 
         with torch.no_grad():
-            for images, masks in tqdm(val_loader, desc=f"Epoch {epoch}/{Config.EPOCHS} [Val]"):
+            for images, masks in tqdm(val_loader,
+                                      desc=f"Epoch {epoch}/{FINETUNE_EPOCHS} [Val]"):
                 images = images.to(device)
                 masks  = masks.to(device)
 
@@ -215,22 +227,22 @@ def main():
         avg_val_loss = val_loss / len(val_loader)
         val_losses.append(avg_val_loss)
 
-        all_preds   = torch.cat(all_preds, dim=0)
+        all_preds   = torch.cat(all_preds,   dim=0)
         all_targets = torch.cat(all_targets, dim=0)
         miou        = compute_miou(all_preds, all_targets,
                                    num_classes=Config.NUM_CLASSES)
         val_mious.append(miou)
 
-        scheduler.step(avg_val_loss)
+        scheduler.step(miou)   # scheduler now tracks mIoU
 
         print(
-            f"\nEpoch {epoch:02d}/{Config.EPOCHS} | "
+            f"\nEpoch {epoch:02d}/{FINETUNE_EPOCHS} | "
             f"Train Loss: {avg_train_loss:.4f} | "
             f"Val Loss: {avg_val_loss:.4f} | "
             f"Val mIoU: {miou:.4f}"
         )
 
-        # ── Save best checkpoint ─────────────────
+        # ── Save best by mIoU ────────────────────
         if miou > best_miou:
             best_miou = miou
             torch.save({
@@ -242,9 +254,8 @@ def main():
             }, checkpoint_path)
             print(f"  ✓ Saved best model → val_loss: {avg_val_loss:.4f} | mIoU: {miou:.4f}")
 
-    print(f"\n✅ Training complete!")
-    print(f"   Best val loss : {best_val_loss:.4f}")
-    print(f"   Best val mIoU : {max(val_mious):.4f}")
+    print(f"\n✅ Fine-tuning complete!")
+    print(f"   Best mIoU : {best_miou:.4f}")
 
     # ── Plot Training History ──────────────────
     epochs_range = range(start_epoch, start_epoch + len(train_losses))
@@ -253,7 +264,7 @@ def main():
 
     axes[0].plot(epochs_range, train_losses, label='Train Loss', marker='o')
     axes[0].plot(epochs_range, val_losses,   label='Val Loss',   marker='o')
-    axes[0].set_title('Loss History')
+    axes[0].set_title('Fine-Tune Loss History')
     axes[0].set_xlabel('Epoch')
     axes[0].set_ylabel('Loss')
     axes[0].legend()
@@ -261,17 +272,17 @@ def main():
 
     axes[1].plot(epochs_range, val_mious, label='Val mIoU',
                  marker='o', color='green')
-    axes[1].set_title('Validation mIoU History')
+    axes[1].set_title('Fine-Tune Validation mIoU')
     axes[1].set_xlabel('Epoch')
     axes[1].set_ylabel('mIoU')
     axes[1].legend()
     axes[1].grid(True)
 
     plt.tight_layout()
-    plot_path = os.path.join(Config.OUTPUT_PATH, 'training_history.png')
+    plot_path = os.path.join(Config.OUTPUT_PATH, 'finetune_history.png')
     plt.savefig(plot_path, dpi=150, bbox_inches='tight')
     plt.show()
-    print(f"✓ Training history saved to: {plot_path}")
+    print(f"✓ Fine-tune history saved to: {plot_path}")
 
 
 if __name__ == "__main__":
