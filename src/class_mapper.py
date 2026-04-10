@@ -108,10 +108,10 @@ class ADEClassMapper:
         #           hardwood, laminate, concrete, mat, runway
         floor_keywords = [
             'floor', 'flooring', 'carpet', 'rug',
-            'path', 'sidewalk', 'pavement', 'tile',
-            'earth', 'ground', 'road', 'field',
-            'grass', 'platform', 'hardwood', 'laminate',
-            'concrete', 'mat', 'runway', 'dirt track'
+            'path', 'sidewalk', 'pavement',
+            'earth, ground', 'ground, soil',
+            'road, route', 'field',
+            'grass', 'runway', 'dirt track'
         ]
         self._map_keywords(floor_keywords, 0, "FLOOR", mapping)
 
@@ -121,8 +121,8 @@ class ADEClassMapper:
         door_keywords = [
             'door', 'doorway', 'doorframe', 'gate',
             'screen door', 'entrance', 'exit',
-            'archway', 'opening', 'french door',
-            'sliding door', 'trapdoor', 'hatch'
+            'archway', 'french door', 'sliding door',
+            'trapdoor', 'hatch'
         ]
         self._map_keywords(door_keywords, 2, "DOOR", mapping)
 
@@ -131,12 +131,13 @@ class ADEClassMapper:
         # added indoor-specific hazards: bannister, railing,
         # swimming pool, shower, bathtub
         nogo_keywords = [
-            'stairs', 'stair', 'staircase', 'stairway',
-            'escalator', 'steps', 'step',
-            'river', 'lake', 'pool', 'sea', 'ocean',
-            'waterfall', 'fountain', 'swimming pool',
-            'fireplace', 'cliff', 'hill', 'mountain',
-            'bannister', 'railing', 'bathtub', 'shower'
+            'stairs, steps', 'stairway', 'staircase',
+            'escalator', 'step, stair',
+            'river', 'lake', 'sea',
+            'swimming pool', 'waterfall', 'fountain',
+            'fireplace', 'hill', 'mountain',
+            'bannister', 'railing, rail',
+            'bathtub', 'shower'
         ]
         self._map_keywords(nogo_keywords, 3, "NO-GO", mapping)
 
