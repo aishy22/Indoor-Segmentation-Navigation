@@ -154,6 +154,7 @@ def main():
 
     # ── Training Loop ─────────────────────────
     start_epoch   = 1
+    best_miou = 0.0
     best_val_loss = float('inf')
     train_losses, val_losses, val_mious = [], [], []
 
