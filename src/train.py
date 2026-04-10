@@ -99,7 +99,7 @@ def main():
     # Weights computed from actual training data frequencies:
     #   floor=9.6%  obstacle/wall=83.65%  door=1.28%  no-go=5.47%
     class_weights = torch.tensor(
-        [0.3868, 0.0444, 2.8897, 0.6791]
+        [0.3868, 0.0444, 8.0, 0.6791]
     ).to(device)
     criterion = FocalLoss(class_weights=class_weights, gamma=2.0).to(device)
 
