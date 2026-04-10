@@ -4,17 +4,15 @@ import os
 import pickle
 import sys
 
-# Add path setup for Colab
 sys.path.insert(0, '/content/Indoor-Segmentation-Navigation')
 sys.path.insert(0, '/content/Indoor-Segmentation-Navigation/src')
 
 try:
     from config import Config
 except ImportError:
-    # Minimal fallback only used when running completely standalone
     class Config:
-        BASE_PATH = '/content/Indoor-Segmentation-Navigation'
-        DATA_PATH = '/content/ADEChallengeData2016'
+        BASE_PATH  = '/content/Indoor-Segmentation-Navigation'
+        DATA_PATH  = '/content/ADEChallengeData2016'
         OUTPUT_PATH = '/content/Indoor-Segmentation-Navigation/outputs'
         CLASS_NAMES = ['floor', 'obstacle/wall', 'door', 'no-go']
 
@@ -22,27 +20,21 @@ except ImportError:
 class ADEClassMapper:
     """
     Maps ADE20K's 150 classes to 4 navigation classes:
-        0: floor
-        1: obstacle/wall  (default)
-        2: door
-        3: no-go (stairs, hazardous zones, etc.)
+        0: floor          — walkable surfaces
+        1: obstacle/wall  — blocked/non-navigable (default)
+        2: door           — transition points
+        3: no-go          — dangerous zones
     """
 
     def __init__(self):
         self.ade_class_names = self.load_ade_classes()
-        self.mapping = self.create_mapping()
+        self.mapping         = self.create_mapping()
 
     def load_ade_classes(self):
-        """Load ADE20K class names from objectInfo150.txt"""
         class_names = {}
-        data_path = getattr(Config, 'DATA_PATH', '/content/ADEChallengeData2016')
-        object_info_path = os.path.join(data_path, 'objectInfo150.txt')
-
-        print(f"Looking for objectInfo150.txt at: {object_info_path}")
-
-        # Try primary path first, then fallback locations
+        data_path   = getattr(Config, 'DATA_PATH', '/content/ADEChallengeData2016')
         possible_paths = [
-            object_info_path,
+            os.path.join(data_path, 'objectInfo150.txt'),
             '/content/data/ADEChallengeData2016/objectInfo150.txt',
         ]
 
@@ -51,34 +43,24 @@ class ADEClassMapper:
                 continue
             try:
                 with open(path, 'r') as f:
-                    next(f)  # Skip header line
+                    next(f)
                     for line in f:
-                        parts = line.strip().split('\t')  # ← FIX: real tab, not '\\t'
+                        parts = line.strip().split('\t')
                         if len(parts) >= 5:
-                            idx = int(parts[0])
+                            idx  = int(parts[0])
                             name = parts[4].strip().lower()
                             class_names[idx] = name
-
                 if class_names:
                     print(f"✓ Loaded {len(class_names)} ADE20K classes from: {path}")
-                    print("\nFirst 10 classes:")
-                    for cid, name in list(class_names.items())[:10]:
-                        print(f"  ID {cid:3d}: {name}")
                     return class_names
-                else:
-                    print(f"  ✗ File found but no classes parsed at: {path}")
-
             except Exception as e:
                 print(f"  ✗ Failed to read {path}: {e}")
                 continue
 
-        # If all paths failed, use hardcoded fallback
-        print("⚠ Could not load objectInfo150.txt from any location.")
-        print("  Using built-in fallback class names instead.")
+        print("⚠ Using built-in fallback class names.")
         return self.get_fallback_classes()
 
     def get_fallback_classes(self):
-        """Hardcoded ADE20K class names as fallback."""
         return {
             1: 'wall', 2: 'building, edifice', 3: 'sky', 4: 'floor, flooring',
             5: 'tree', 6: 'ceiling', 7: 'road, route', 8: 'bed',
@@ -114,10 +96,6 @@ class ADEClassMapper:
         }
 
     def create_mapping(self):
-        """
-        Create mapping from ADE20K class IDs to 4 navigation classes.
-        Returns: dict {ade_class_id: nav_class_id}
-        """
         # Default everything to obstacle/wall (class 1)
         mapping = {ade_id: 1 for ade_id in self.ade_class_names}
 
@@ -125,29 +103,44 @@ class ADEClassMapper:
         print("MAPPING ADE20K CLASSES TO NAVIGATION CLASSES")
         print("=" * 60)
 
-        # Floor classes → 0
+        # ── Floor → 0 ─────────────────────────────────────────────
+        # Expanded: added road, pavement, field, grass, platform,
+        #           hardwood, laminate, concrete, mat, runway
         floor_keywords = [
-            'floor', 'flooring', 'carpet', 'rug', 'ground',
-            'path', 'sidewalk', 'pavement', 'tile', 'earth'
+            'floor', 'flooring', 'carpet', 'rug',
+            'path', 'sidewalk', 'pavement', 'tile',
+            'earth', 'ground', 'road', 'field',
+            'grass', 'platform', 'hardwood', 'laminate',
+            'concrete', 'mat', 'runway', 'dirt track'
         ]
         self._map_keywords(floor_keywords, 0, "FLOOR", mapping)
 
-        # Door classes → 2
+        # ── Door → 2 ──────────────────────────────────────────────
+        # Expanded: added archway, opening, entrance, exit,
+        #           french door, sliding door, trapdoor
         door_keywords = [
             'door', 'doorway', 'doorframe', 'gate',
-            'screen door', 'entrance', 'exit'
+            'screen door', 'entrance', 'exit',
+            'archway', 'opening', 'french door',
+            'sliding door', 'trapdoor', 'hatch'
         ]
         self._map_keywords(door_keywords, 2, "DOOR", mapping)
 
-        # No-go zones → 3
+        # ── No-go → 3 ─────────────────────────────────────────────
+        # More precise: removed vague 'water' keyword,
+        # added indoor-specific hazards: bannister, railing,
+        # swimming pool, shower, bathtub
         nogo_keywords = [
-            'stairs', 'stair', 'staircase', 'stairway', 'escalator', 'steps',
-            'river', 'lake', 'water', 'pool', 'ocean', 'sea',
-            'cliff', 'mountain', 'fireplace', 'waterfall', 'fountain', 'hill'
+            'stairs', 'stair', 'staircase', 'stairway',
+            'escalator', 'steps', 'step',
+            'river', 'lake', 'pool', 'sea', 'ocean',
+            'waterfall', 'fountain', 'swimming pool',
+            'fireplace', 'cliff', 'hill', 'mountain',
+            'bannister', 'railing', 'bathtub', 'shower'
         ]
         self._map_keywords(nogo_keywords, 3, "NO-GO", mapping)
 
-        # Summary
+        # ── Summary ───────────────────────────────────────────────
         counts = {0: 0, 1: 0, 2: 0, 3: 0}
         for nav_class in mapping.values():
             counts[nav_class] += 1
@@ -155,16 +148,15 @@ class ADEClassMapper:
         print("\n" + "=" * 60)
         print("MAPPING SUMMARY")
         print("=" * 60)
-        print(f"  Floor        (class 0): {counts[0]} ADE classes")
-        print(f"  Obstacle/Wall(class 1): {counts[1]} ADE classes (default)")
-        print(f"  Door         (class 2): {counts[2]} ADE classes")
-        print(f"  No-go        (class 3): {counts[3]} ADE classes")
+        print(f"  Floor         (class 0): {counts[0]:3d} ADE classes")
+        print(f"  Obstacle/Wall (class 1): {counts[1]:3d} ADE classes (default)")
+        print(f"  Door          (class 2): {counts[2]:3d} ADE classes")
+        print(f"  No-go         (class 3): {counts[3]:3d} ADE classes")
         print("=" * 60)
 
         return mapping
 
     def _map_keywords(self, keywords, target_class, class_name, mapping):
-        """Map ADE20K classes whose names contain any keyword to target_class."""
         print(f"\n{class_name} (class {target_class}):")
         found_ids = []
         for ade_id, name in self.ade_class_names.items():
@@ -173,15 +165,13 @@ class ADEClassMapper:
                 print(f"  ID {ade_id:3d}: {name[:60]}")
                 found_ids.append(ade_id)
         if not found_ids:
-            print(f"  No matches found")
+            print(f"  ⚠ No matches found!")
         return found_ids
 
     def save_mapping(self):
-        """Save the mapping dict to a .pkl file for use in data_prep.py"""
-        base_path = getattr(Config, 'BASE_PATH', '/content/Indoor-Segmentation-Navigation')
+        base_path    = getattr(Config, 'BASE_PATH', '/content/Indoor-Segmentation-Navigation')
         mapping_path = os.path.join(base_path, 'ade_to_nav_mapping.pkl')
         os.makedirs(os.path.dirname(mapping_path), exist_ok=True)
-
         with open(mapping_path, 'wb') as f:
             pickle.dump(self.mapping, f)
         print(f"\n✓ Mapping saved to: {mapping_path}")
@@ -193,10 +183,6 @@ if __name__ == "__main__":
     print("=" * 60)
     print("RUNNING CLASS MAPPER")
     print("=" * 60)
-
     mapper = ADEClassMapper()
     mapper.save_mapping()
-
-    print("\n" + "=" * 60)
-    print("✅ Class mapping complete!")
-    print("=" * 60)
+    print("\n✅ Class mapping complete!")
