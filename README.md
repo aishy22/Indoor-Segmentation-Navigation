@@ -31,7 +31,7 @@ Indoor-Segmentation-Navigation/
 └── requirements.txt
 ```
 
-## 4.Dataset and Class Mapping
+## 4. Dataset and Class Mapping
 
 The model is trained on the **ADE20K** dataset. Because ADE20K has 150 classes, we use `class_mapper.py` to compress them into **4 navigation-relevant classes** before training:
 
@@ -43,7 +43,7 @@ The model is trained on the **ADE20K** dataset. Because ADE20K has 150 classes, 
 | **3** | **No-Go Zone** (stairs, water, etc.)| `inf` | Hazardous / Blocked |
 
 ---
-## 4.Installation
+## 5. Installation
 
 1. **Clone the repository:**
    ```bash
@@ -58,18 +58,39 @@ The model is trained on the **ADE20K** dataset. Because ADE20K has 150 classes, 
 3. **Download Trained Weights:**
    Download the trained `best_model.pth` file from the provided Google Drive link (insert your link here) and place it inside the `models/` directory.
 
-## 5.How to Use
+## 6. How to Use
+1. **Generate a Cost Map from an Image**:
+   To segment an image and generate its traversal cost map, use the cost map generator:
+```bash
+python src/cost_map_generator.py --image path/to/input.jpg --model models/best_model.pth
+```
+This will output `costmap.npy` (the numerical grid) and visualization images.
 
-## 6.Sample Results
+2. **Plan a Safe Path**:
+   Run the A* planner on the generated cost map. You can optionally specify the start and goal coordinates `(y, x)` and the safety margin.
+```bash
+python src/astar_planner.py \
+    --cost_map costmap.npy \
+    --image path/to/input.jpg \
+    --start "200,50" \
+    --goal "220,200" \
+    --margin 25
+```
 
-## 7.Challenges and Solution
+This will output the optimal path coordinates and save a visualization plot `path_result.png` showing the route, the cost map, and the safety distance map.
+
+## 7. Sample Results
+
+## 8. Challenges and Solution
+
 **Large Dataset**:The ADE20K dataset's 20GB size with 22,000+ images posed significant storage and memory challenges. Using Google Colab Pro's high-RAM environment and GPU acceleration, this implemented efficient PyTorch DataLoaders with batch processing to stream data dynamically during training. This approach eliminated memory bottlenecks and enabled smooth training on the full dataset.
 
 **Path Hugging Walls**:Standard A* path planning prioritizes shortest distance, often producing paths that hug dangerously close to walls and obstacles. This project solved this by implementing a distance transform that calculates each cell's proximity to obstacles, then adding penalty costs for cells within a 25-pixel safety margin. This creates a "safety bubble" around obstacles, ensuring paths maintain safe distance while still finding efficient routes.
 
 **Overfitting**:
 
-## 8.Future Improvements 
+## 9. Future Improvements 
+
 **Real-time video processing**: Extend from single images to live video streams by optimizing inference speed and implementing frame-to-frame consistency for smoother robot navigation.
 
 **Dynamic obstacle avoidance**: Incorporate real-time object detection to handle moving obstacles like people and pets, allowing the robot to dynamically re-plan paths.
@@ -85,3 +106,8 @@ The model is trained on the **ADE20K** dataset. Because ADE20K has 150 classes, 
 
 **Assisstive robots**: Help visually impaired people navigate indoors
 
+
+## 👥 Contributors
+* **Group 10**
+* Prithula Prashun Aishy 
+* WU Chun Him 
