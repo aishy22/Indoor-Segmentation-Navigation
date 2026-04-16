@@ -1,91 +1,82 @@
 # Indoor Navigation Segmentation
-## Overview
+## 1. Overview
 
-This project provides a complete pipeline for indoor robot navigation using **semantic segmentation**. The system identifies 4 key navigation classes from any indoor image and generates optimal, safe paths using an enhanced A* algorithm with configurable safety margins.
+This project provides a complete pipeline for indoor robot navigation using **semantic segmentation** with **A-star path planning**. The system identifies 4 key navigation classes from any indoor image and instead of relying solely on raw images or geometric obstacle detection, the system understands the semantic context of the scene to generate a semantically safe and optimal path.
 
-## Navigation Classes
-- **0: floor** - Traversable (cost 1.0)
-- **1: wall** - Blocked (cost inf)
-- **2: door** - Preferred path (cost 0.8)
-- **3: no-go** - Blocked (cost inf)
+## 2. Project Pipeline
 
-## How to Run 
-### ============================================
-### INDOOR NAVIGATION - UPLOAD & PROCESS
-### ============================================
+The navigation system operates in four main stages:
+1. **Perception:** A U-Net model with a ResNet50 encoder performs pixel-wise scene classification on an input image.
+2. **Semantic Mapping:** The predicted segmentation mask is converted into a traversal cost map, assigning low travel costs to floors and doors, and infinite costs to walls and hazards.
+3. **Safety Margin:** A distance transform inflates obstacles to ensure the robot maintains a safe distance from walls.
+4. **Path Planning:** A safety-aware A* algorithm calculates the shortest optimal path from the start point to the goal point on the cost map.
+
+## 3. Repository Structure
+
+The project is modular, with core logic separated into specific scripts within the `src/` directory.
+
 ```bash
-import os
-import sys
-import cv2
-import numpy as np
-import matplotlib.pyplot as plt
-from google.colab import files
-
-print("="*60)
-print("INDOOR NAVIGATION SYSTEM")
-print("="*60)
-
-# Step 1: Setup
-!pip install -q segmentation-models-pytorch albumentations opencv-python matplotlib numpy gdown scipy
-
-# Step 2: Clone or use existing repo
-if not os.path.exists('/content/Indoor-Segmentation-Navigation'):
-    !git clone https://github.com/aishy22/Indoor-Segmentation-Navigation.git
-%cd /content/Indoor-Segmentation-Navigation
-
-# Step 3: Add to path and import YOUR files
-sys.path.insert(0, 'src')
-from cost_map_generator import ColorCodedCostMapGenerator
-from astar_planner import plan_path
-
-# Step 4: Download model (if not exists)
-!gdown "https://drive.google.com/uc?id=1TArpiIxo_Vt1rLNZtFdhnS_66N2Hh7n-" -O models/best_model.pth -q
-
-# Step 5: Load model
-generator = ColorCodedCostMapGenerator('models/best_model.pth')
-
-# Step 6: Upload and process
-print("\n📸 Upload your indoor image:")
-uploaded = files.upload()
-
-for filename in uploaded.keys():
-    print(f"\nProcessing: {filename}")
-    image = cv2.imread(filename)
-    h, w = image.shape[:2]
-    
-    # Generate cost map
-    results = generator.process_image(image, save_prefix=f'output_{filename[:-4]}')
-    cost_map = results['cost_map']
-    
-    # Plan path 
-    start = (int(h * 0.7), int(w * 0.2))
-    goal = (int(h * 0.8), int(w * 0.7))
-    path, planner = plan_path(cost_map, image, start, goal, safety_margin=25)
-    
-    # Show results
-    generator.visualize(results, save_path=f'result_{filename[:-4]}.png')
-    
-    # Download
-    files.download(f'output_{filename[:-4]}_cost_map.npy')
-    files.download(f'result_{filename[:-4]}.png')
-
-print("\n✅ Done!")
+Indoor-Segmentation-Navigation/
+├── src/
+│   ├── data_prep.py          # loads ADE20K images and masks
+│   ├── class_mapper.py       # remaps 150 ADE20K classes to 4 nav classes
+│   ├── model.py              # U-Net + ResNet50 segmentation model
+│   ├── train.py              # training and validation pipeline
+│   ├── cost_map_generator.py # creates traversability cost maps
+│   ├── astar_planner.py      # path planning on the cost map
+│   └── config.py             # global settings
+├── models/
+│   └── .gitkeep
+├── README.md
+└── requirements.txt
 ```
-## Challenges and Solution
+
+## 4.Dataset and Class Mapping
+
+The model is trained on the **ADE20K** dataset. Because ADE20K has 150 classes, we use `class_mapper.py` to compress them into **4 navigation-relevant classes** before training:
+
+| Class ID | Semantic Class | Traversal Cost | Meaning |
+| :---: | :--- | :--- | :--- |
+| **0** | **Floor** (carpet, rug, etc.) | `1.0` | Safe to traverse |
+| **1** | **Wall/Obstacle** (furniture, etc.) | `inf` | Blocked / Collision |
+| **2** | **Door** (doorway, etc.) | `0.8` | Passable / Preferred transition |
+| **3** | **No-Go Zone** (stairs, water, etc.)| `inf` | Hazardous / Blocked |
+
+---
+## 4.Installation
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/aishy22/Indoor-Segmentation-Navigation.git
+   cd Indoor-Segmentation-Navigation
+   ```
+2. **Install dependencies:**
+   It is recommended to use a virtual environment.
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. **Download Trained Weights:**
+   Download the trained `best_model.pth` file from the provided Google Drive link (insert your link here) and place it inside the `models/` directory.
+
+## 5.How to Use
+
+## 6.Sample Results
+
+## 7.Challenges and Solution
 **Large Dataset**:The ADE20K dataset's 20GB size with 22,000+ images posed significant storage and memory challenges. Using Google Colab Pro's high-RAM environment and GPU acceleration, this implemented efficient PyTorch DataLoaders with batch processing to stream data dynamically during training. This approach eliminated memory bottlenecks and enabled smooth training on the full dataset.
 
 **Path Hugging Walls**:Standard A* path planning prioritizes shortest distance, often producing paths that hug dangerously close to walls and obstacles. This project solved this by implementing a distance transform that calculates each cell's proximity to obstacles, then adding penalty costs for cells within a 25-pixel safety margin. This creates a "safety bubble" around obstacles, ensuring paths maintain safe distance while still finding efficient routes.
 
 **Overfitting**:
 
-## Future Improvements 
+## 8.Future Improvements 
 **Real-time video processing**: Extend from single images to live video streams by optimizing inference speed and implementing frame-to-frame consistency for smoother robot navigation.
 
 **Dynamic obstacle avoidance**: Incorporate real-time object detection to handle moving obstacles like people and pets, allowing the robot to dynamically re-plan paths.
 
 **Better door detection**:Collect more door examples to improve door detection accuracy, currently the weakest class due to limited training samples.
 
-## Applications
+## 9.Applications
 **Home robots**: Roomba-style vacuums that understand room layouts
 
 **Hospital robots**: Deliver medicine without bumping into equipment
@@ -93,3 +84,4 @@ print("\n✅ Done!")
 **Warehouse robots**: Navigate between shelves safely
 
 **Assisstive robots**: Help visually impaired people navigate indoors
+
