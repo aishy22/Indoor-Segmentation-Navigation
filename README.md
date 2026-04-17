@@ -167,7 +167,7 @@ This will automatically find the best floor pixels on the left and right sides o
 
 **Path Hugging Walls**:Standard A* path planning prioritizes shortest distance, often producing paths that hug dangerously close to walls and obstacles. This project solved this by implementing a distance transform that calculates each cell's proximity to obstacles, then adding penalty costs for cells within a 25-pixel safety margin. This creates a "safety bubble" around obstacles, ensuring paths maintain safe distance while still finding efficient routes.
 
-**Overfitting**:
+**Overfitting**:Implemented extensive data augmentation (flips, rotations, color jitter) and added a 0.3 dropout rate to the decoder to force the network to learn generalized features instead of exact pixel patterns.
 
 ## 9. Future Improvements 
 
