@@ -47,39 +47,119 @@ The model is trained on the **ADE20K** dataset. Because ADE20K has 150 classes, 
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/aishy22/Indoor-Segmentation-Navigation.git
-   cd Indoor-Segmentation-Navigation
+   !git clone https://github.com/aishy22/Indoor-Segmentation-Navigation.git
+   %cd Indoor-Segmentation-Navigation
    ```
 2. **Install dependencies:**
    It is recommended to use a virtual environment.
    ```bash
-   pip install -r requirements.txt
+   !pip install -r requirements.txt
    ```
 3. **Download Trained Weights:**
-   Download the trained `best_model.pth` file from the provided Google Drive link (insert your link here) and place it inside the `models/` directory.
+   Download the trained `best_model.pth` file from the provided Google Drive link and place it inside the `models/` directory.
+First, update gdown to avoid Google Drive permission errors.
+   ```bash
+   !pip install --upgrade gdown
+   ```
+   Then download the model.
+   ```bash
+   !gdown "1lDgvHLZvAGs4j0RmcRjJPvc3ZRmh2beS" -O models/best_model.pth
+   ```
 
 ## 6. How to Use
-1. **Generate a Cost Map from an Image**:
-   To segment an image and generate its traversal cost map, use the cost map generator:
+1. **Segmentation and cost map generator**:
+
 ```bash
-python src/cost_map_generator.py --image path/to/input.jpg --model models/best_model.pth
+import sys
+import cv2
+import numpy as np
+from google.colab import files
+
+sys.path.insert(0, '/content/Indoor-Segmentation-Navigation/src')
+sys.path.insert(0, '/content/Indoor-Segmentation-Navigation')
+
+from cost_map_generator import ColorCodedCostMapGenerator
+
+print("⏳ Loading model...")
+model_path = '/content/Indoor-Segmentation-Navigation/models/best_model.pth'
+
+generator = ColorCodedCostMapGenerator(model_path=model_path)
+print("✅ Model loaded!")
+
+
+# STEP 1 — Upload image
+print("📁 Please upload your image...")
+uploaded = files.upload()
+filename = list(uploaded.keys())[0]
+print(f"✅ Uploaded: {filename}")
+
+# STEP 2 — Load image
+image = cv2.imread(filename)
+if image is None:
+    print("❌ Could not load image. Try uploading again.")
+else:
+    print(f"✅ Image loaded! Shape: {image.shape}")
+
+    # STEP 3 — Run cost map pipeline
+    results = generator.process_image(image, save_prefix='/content/output')
+
+    # STEP 4 — Visualize
+    generator.visualize(results, save_path='/content/output_figure.png')
+
+    # STEP 5 — Print statistics
+    generator.print_statistics(results)
+
+    # STEP 6 — Download outputs back to your PC
+    print("\n📥 Downloading output files...")
+    files.download('/content/output_figure.png')
+    files.download('/content/output_colored_segmentation.png')
+    files.download('/content/output_cost_viz.png')
+    files.download('/content/output_cost_map.npy')
+    print("✅ All done!")
 ```
 This will output `costmap.npy` (the numerical grid) and visualization images.
 
 2. **Plan a Safe Path**:
-   Run the A* planner on the generated cost map. You can optionally specify the start and goal coordinates `(y, x)` and the safety margin.
+ 
 ```bash
-python src/astar_planner.py \
-    --cost_map costmap.npy \
-    --image path/to/input.jpg \
-    --start "200,50" \
-    --goal "220,200" \
-    --margin 25
+import numpy as np
+from astar_planner import plan_path
+
+# Extract cost map and image dimensions from previous step
+cost_map = results['cost_map']
+h, w     = image.shape[:2]
+
+# Goal: Route from bottom-left floor → bottom-right floor
+# Auto-snap both to the nearest valid traversable point
+traversable = np.argwhere(~np.isinf(cost_map))
+bottom      = traversable[traversable[:, 0] > int(h * 0.7)]
+
+idx_s = np.argmin(np.abs(bottom[:, 1] - int(w * 0.1)))
+idx_g = np.argmin(np.abs(bottom[:, 1] - int(w * 0.6)))
+
+start = tuple(bottom[idx_s])
+goal  = tuple(bottom[idx_g])
+
+print(f"✅ Start : {start}")
+print(f"✅ Goal  : {goal}")
+
+# Run the safety-aware A* planner
+path, planner = plan_path(
+    cost_map      = cost_map,
+    image         = image,
+    start         = start,
+    goal          = goal,
+    safety_margin = 20,    # smaller margin since floor area is narrow
+    save_path     = '/content/astar_result.png'
+)
 ```
 
-This will output the optimal path coordinates and save a visualization plot `path_result.png` showing the route, the cost map, and the safety distance map.
+This will automatically find the best floor pixels on the left and right sides of the image, navigate around any no-go obstacles, and save the final visual output
 
 ## 7. Sample Results
+<img width="1389" height="1126" alt="image" src="https://github.com/user-attachments/assets/1defba1d-c355-4de7-8018-7e4f9b68ce27" />
+<img width="1389" height="1190" alt="image" src="https://github.com/user-attachments/assets/70306457-375f-403c-926f-35f6fa10ada3" />
+
 
 ## 8. Challenges and Solution
 
